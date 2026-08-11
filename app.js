@@ -4,12 +4,18 @@ import fixed from './schemes/fixed.js';
 import { label as relativeLabel } from './schemes/relative.js';
 import { label as driftLabel } from './schemes/drift.js';
 import { label as fixedLabel } from './schemes/fixed.js';
+import heldbreath, { label as heldbreathLabel } from './schemes/heldbreath.js';
+import patchwalk, { label as patchwalkLabel } from './schemes/patchwalk.js';
+import harmonicField, { label as harmonicFieldLabel } from './schemes/harmonic-field.js';
 
 // Adding a scheme = one file in schemes/ + one entry here.
 const SCHEMES = {
   relative: { fn: relative, label: relativeLabel },
   drift: { fn: drift, label: driftLabel },
   fixed: { fn: fixed, label: fixedLabel },
+  heldbreath: { fn: heldbreath, label: heldbreathLabel },
+  patchwalk: { fn: patchwalk, label: patchwalkLabel },
+  'harmonic-field': { fn: harmonicField, label: harmonicFieldLabel },
 };
 
 const SCALES = {
