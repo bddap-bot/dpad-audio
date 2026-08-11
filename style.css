@@ -1,0 +1,102 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #0b0b14;
+  color: #cfcfe8;
+  font-family: system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+main {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.75rem, env(safe-area-inset-bottom));
+}
+
+header {
+  width: 100%;
+  max-width: 30rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+h1 { font-size: 1rem; font-weight: 500; color: #6f6f92; }
+
+.pickers { display: flex; gap: 0.75rem; }
+
+.pickers label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+  color: #6f6f92;
+}
+
+select {
+  background: #16162a;
+  color: #cfcfe8;
+  border: 1px solid #2c2c4a;
+  border-radius: 0.4rem;
+  padding: 0.45rem 0.5rem;
+  font-size: 1rem;
+}
+
+#path {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 2.2rem;
+  letter-spacing: 0.1em;
+  color: #9d9dd8;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 100%;
+}
+
+#path .latest { color: #e8e8ff; text-shadow: 0 0 12px #7c7cff; }
+
+#dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 0.6rem;
+  width: min(88vw, 55dvh, 26rem);
+  aspect-ratio: 1;
+}
+
+.key, #clear {
+  border: none;
+  border-radius: 1.2rem;
+  font-size: 2.4rem;
+  color: #b8b8e8;
+  background: #1a1a30;
+  box-shadow: inset 0 0 0 1px #2c2c4a;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.key:active, .key.lit {
+  background: #34346a;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px #5c5cb8, 0 0 18px #4c4ca880;
+}
+
+#key-up    { grid-area: 1 / 2; }
+#key-left  { grid-area: 2 / 1; }
+#key-right { grid-area: 2 / 3; }
+#key-down  { grid-area: 3 / 2; }
+#clear     { grid-area: 2 / 2; font-size: 1.4rem; color: #55557a; }
+#clear:active { color: #cfcfe8; }
+
+footer { font-size: 0.7rem; color: #44445f; text-align: center; }
