@@ -29,7 +29,8 @@ nothing in them exists in-game yet.
 
 **Hash schema** — the URL is the interface (the in-game chain is rebuilt from
 these links), and values at their default are deleted, not written, so a URL
-carries only what changed:
+carries only what changed (except `scheme`/`scale`, always pinned at boot, and
+`sb`, pinned when a panel gate implies it):
 
 - `scheme`, `scale` — pickers. `dev`, `fx`, `sb` = `1` — dev panel, master fx
   panel, sidebar open (absent `sb` opens the sidebar iff `dev` or `fx` is set).

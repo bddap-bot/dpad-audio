@@ -19,7 +19,7 @@ dom=$(chromium --headless=new --disable-gpu --no-sandbox \
 
 # Match the verdict only where the harness renders it (the <pre>), never the
 # harness's own inline script source, which --dump-dom also serializes.
-verdict=$(echo "$dom" | grep -oE '<pre id="out">DOM-TEST: (PASS|FAIL)' | head -1 | sed 's/.*>//')
+verdict=$(echo "$dom" | grep -oE '<pre id="out">DOM-TEST: (PASS|FAIL)' | head -1 | sed 's/.*>//' || true)
 echo "${verdict:-DOM-TEST: NO-VERDICT (harness never rendered)}"
 echo "$dom" | grep -E '^FAIL: ' || true
 [ "$verdict" = "DOM-TEST: PASS" ]

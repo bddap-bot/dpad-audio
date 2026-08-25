@@ -290,7 +290,10 @@ function sliderRow(p, value, onInput, onChange) {
   const input = document.createElement('input');
   input.type = 'range';
   const toSlider = (v) => (p.log ? Math.log10(v) : v);
-  const fromSlider = (v) => (p.log ? Math.pow(10, v) : v);
+  // The 0.001 log grid is anchored at `min`, so the default may sit between
+  // ticks; snap the nearest tick onto it or delete-at-default never fires.
+  const fromSlider = (v) =>
+    p.log ? (Math.abs(v - Math.log10(p.def)) <= 0.0005 ? p.def : Math.pow(10, v)) : v;
   input.min = toSlider(p.min);
   input.max = toSlider(p.max);
   input.step = p.log ? 0.001 : p.step;
