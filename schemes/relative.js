@@ -1,11 +1,12 @@
 // Pentatonic relative walk (default scheme).
 //
-// A scheme is a pure function (comboState, press) -> soundEvent.
+// A scheme is a pure function (comboState, press) -> NoteSpec (see synth.js).
 //   comboState: { path, depth, unlocks, scale, rootHz }
 //     path:   presses so far, NOT including this one, e.g. ['U','R']
 //     scale:  semitone offsets from the root, e.g. [0,3,5,7,10]
 //   press: 'U' | 'D' | 'L' | 'R'
-//   soundEvent: { freq, detuneCents, gain, timbre: { decay, brightness } }
+//   NoteSpec: { freqHz, detuneCents, tauS, brightness, crush, gain } —
+//     tauS is the decay time constant; a note rings ~7τ.
 //
 // Here each direction moves a number of SCALE DEGREES relative to where the
 // melody already is, so the same press sounds different depending on the path
@@ -18,10 +19,12 @@ const STEP = { U: 1, R: 2, D: -1, L: -2 };
 export default function relative(state, press) {
   const degree = walkDegrees(state.path, STEP) + STEP[press];
   return {
-    freq: degreeToFreq(degree, state.scale, state.rootHz),
+    freqHz: degreeToFreq(degree, state.scale, state.rootHz),
     detuneCents: 0,
+    tauS: 1.1 / 7,
+    brightness: 0.5,
+    crush: 0,
     gain: 0.8,
-    timbre: { decay: 1.1, brightness: 0.5 },
   };
 }
 

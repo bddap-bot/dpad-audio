@@ -45,14 +45,13 @@ export default function patchwalk(state, press) {
   const depth = after.length;
   return {
     // deep space sinks: -1 semitone of continuous drift per 3 presses
-    freq: degreeToFreq(degree, state.scale, state.rootHz) * Math.pow(2, -depth / 36),
+    freqHz: degreeToFreq(degree, state.scale, state.rootHz) * Math.pow(2, -depth / 36),
     detuneCents: 3 + depth * 4, // deeper = wider
+    tauS: (0.7 + patch.warmth * 0.8) / 7, // warm regions ring longer
+    // inharm/breath tilt the shade so glass and air still read differently
+    brightness: clamp01(patch.brightness + 0.15 * patch.inharm + 0.1 * patch.breath),
+    crush: 0,
     gain: 0.8,
-    timbre: {
-      // inharm/breath tilt the shade so glass and air still read differently
-      brightness: clamp01(patch.brightness + 0.15 * patch.inharm + 0.1 * patch.breath),
-      decay: 0.7 + patch.warmth * 0.8, // warm regions ring longer
-    },
   };
 }
 

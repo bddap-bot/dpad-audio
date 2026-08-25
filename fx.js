@@ -1,12 +1,20 @@
 // Post-fx exploration chain (dpad-audio#1). No post-processing exists in-game:
 // this panel is where effects get PICKED by ear before anything ships. Every
-// stage is a dry/wet crossfade, fully bypassed until enabled; enabling lands
-// on a musical default, not a neutral one.
+// stage is a dry/wet crossfade, wet-muted until enabled (nodes keep running —
+// simplicity over idle-DSP thrift); enabling lands on a musical default, not
+// a neutral one. A limiter sits before the destination so no combination of
+// maxed settings (delay feedback + big reverb + crush) can get painful.
 //
 // Chain order: crush → filter → chorus → phaser → delay → reverb.
 
+// `lazy: true` = apply on slider release, not per-pixel (for expensive sets).
+// Param key 'wet' is reserved — the stage's wet slider claims fx-<key>-wet.
 function param(key, label, min, max, step, def, set, opts = {}) {
   return { key, label, min, max, step, def, set, ...opts };
+}
+
+function selectParam(key, label, options, def, set) {
+  return { key, label, kind: 'select', options, def, set };
 }
 
 function makeStage(ctx, key, label, defWet) {
@@ -75,10 +83,7 @@ function filterStage(ctx) {
   f.Q.value = 6;
   st.input.connect(f).connect(st.wet);
   st.params = [
-    param('type', 'type', 0, 0, 0, 'lowpass', (v) => (f.type = v), {
-      kind: 'select',
-      options: ['lowpass', 'highpass'],
-    }),
+    selectParam('type', 'type', ['lowpass', 'highpass'], 'lowpass', (v) => (f.type = v)),
     param('cut', 'cutoff (Hz)', 80, 10000, 1, 1200, (v) => f.frequency.setTargetAtTime(v, ctx.currentTime, 0.02), { log: true }),
     param('q', 'resonance', 0.5, 20, 0.1, 6, (v) => (f.Q.value = v)),
   ];
@@ -156,9 +161,14 @@ function impulse(ctx, seconds) {
   const buf = ctx.createBuffer(2, len, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
     const data = buf.getChannelData(ch);
+    let energy = 0;
     for (let i = 0; i < len; i++) {
       data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+      energy += data[i] * data[i];
     }
+    // Unit energy, so the size slider changes the room, not the volume.
+    const scale = 1 / Math.sqrt(energy);
+    for (let i = 0; i < len; i++) data[i] *= scale;
   }
   return buf;
 }
@@ -169,7 +179,9 @@ function reverbStage(ctx) {
   conv.buffer = impulse(ctx, 1.8);
   st.input.connect(conv).connect(st.wet);
   st.params = [
-    param('size', 'size (s)', 0.2, 6, 0.1, 1.8, (v) => (conv.buffer = impulse(ctx, v))),
+    param('size', 'size (s)', 0.2, 6, 0.1, 1.8, (v) => (conv.buffer = impulse(ctx, v)), {
+      lazy: true, // a fresh multi-second IR per pixel of drag would click and churn
+    }),
   ];
   return st;
 }
@@ -185,6 +197,12 @@ export function buildFx(ctx) {
     node.connect(st.input);
     node = st.output;
   }
-  node.connect(ctx.destination);
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -3;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.25;
+  node.connect(limiter).connect(ctx.destination);
   return { input, stages };
 }

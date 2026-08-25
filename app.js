@@ -30,24 +30,36 @@ const ROOT_HZ = 220; // A3
 const IDLE_CLEAR_MS = 2500;
 const GLYPH = { U: '↑', D: '↓', L: '←', R: '→' };
 
-// --- URL params: every knob on the page lives in the hash (query also read),
-// so any state is a shareable link, e.g. #scheme=heldbreath&fx-delay=1 ---
+// --- URL params: every knob on the page lives in the hash, so any state is a
+// shareable link, e.g. #scheme=heldbreath&fx-delay=1. Query params are folded
+// into the hash once at boot (then dropped from the URL — a lingering query
+// would resurrect state the user has since turned off). The URL write is
+// debounced: Safari throws once history.replaceState exceeds ~100 calls/30 s,
+// which one slider drag would blow through. ---
 const hash = new URLSearchParams(location.hash.slice(1));
-const query = new URLSearchParams(location.search);
-const getParam = (k) => hash.get(k) ?? query.get(k);
+for (const [k, v] of new URLSearchParams(location.search)) {
+  if (!hash.has(k)) hash.set(k, v);
+}
+const getParam = (k) => hash.get(k);
 const getNum = (k) => {
   const v = parseFloat(getParam(k));
   return Number.isFinite(v) ? v : null;
 };
+let hashTimer = null;
 function setParam(k, v) {
   if (v === null || v === undefined) hash.delete(k);
   else hash.set(k, String(v));
-  history.replaceState(null, '', '#' + hash.toString());
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(
+    () => history.replaceState(null, '', location.pathname + '#' + hash.toString()),
+    250,
+  );
 }
 
 // The game (in-game defaults): heldbreath on hirajoshi.
-let schemeKey = SCHEMES[getParam('scheme')] ? getParam('scheme') : 'heldbreath';
-let scaleKey = SCALES[getParam('scale')] ? getParam('scale') : 'hirajoshi';
+const pick = (table, k, def) => (Object.hasOwn(table, k ?? '') ? k : def);
+let schemeKey = pick(SCHEMES, getParam('scheme'), 'heldbreath');
+let scaleKey = pick(SCALES, getParam('scale'), 'hirajoshi');
 let path = [];
 let idleTimer = null;
 
@@ -80,20 +92,6 @@ function playPhrase(specs) {
   src.start();
 }
 
-// Scheme press events use the legacy shape ({freq, timbre:{decay,…}}, decay =
-// time to silence); the synth speaks NoteSpec (tauS, rings 7τ) — convert here.
-function specFromEvent(ev) {
-  return {
-    onsetS: 0,
-    freqHz: ev.freq,
-    detuneCents: ev.detuneCents ?? 0,
-    tauS: ev.timbre.decay / 7,
-    brightness: ev.timbre.brightness,
-    crush: ev.crush ?? 0,
-    gain: ev.gain,
-  };
-}
-
 // --- combo state + press handling ---
 function comboState() {
   return {
@@ -107,7 +105,7 @@ function comboState() {
 
 function press(dir) {
   ensureAudio();
-  playPhrase([specFromEvent(SCHEMES[schemeKey].fn(comboState(), dir))]);
+  playPhrase([SCHEMES[schemeKey].fn(comboState(), dir)]);
   path.push(dir);
   renderPath();
   clearTimeout(idleTimer);
@@ -198,6 +196,8 @@ document.getElementById('reject').addEventListener('pointerdown', (e) => {
 const KEYMAP = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R' };
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
+  // A focused slider/select/summary owns its keys (arrow-nudge, Enter-toggle).
+  if (e.target.closest?.('input, select, textarea, button, summary')) return;
   if (KEYMAP[e.key]) {
     e.preventDefault();
     press(KEYMAP[e.key]);
@@ -278,7 +278,7 @@ function devPluck() {
   playPhrase([
     {
       onsetS: 0,
-      freqHz: 110 * Math.pow(2, devVals.pitch / 12),
+      freqHz: (ROOT_HZ / 2) * Math.pow(2, devVals.pitch / 12), // A2, the heldbreath register
       detuneCents: devVals.detune,
       tauS: devVals.decay / 7,
       brightness: devVals.bright,
@@ -347,10 +347,21 @@ function devPluck() {
       } else {
         const v0 = getNum(k) ?? p.def;
         if (v0 !== p.def) p.set(v0);
-        box.appendChild(sliderRow(p, v0, (v) => {
-          p.set(v);
-          setParam(k, v);
-        }));
+        // Lazy params (expensive sets, e.g. reverb IR rebuild) apply on
+        // release; everything else tracks the drag.
+        let pending = v0;
+        box.appendChild(
+          sliderRow(
+            p,
+            v0,
+            (v) => {
+              pending = v;
+              if (!p.lazy) p.set(v);
+              setParam(k, v);
+            },
+            p.lazy ? () => p.set(pending) : null,
+          ),
+        );
       }
     }
     root.appendChild(box);

@@ -103,6 +103,10 @@ select {
 
 #cadence { display: flex; gap: 0.6rem; }
 
+/* Author display:flex beats the UA's [hidden] rule; visibility keeps the
+   row's space so the d-pad doesn't jump when schemes toggle it. */
+#cadence[hidden] { visibility: hidden; }
+
 #cadence button, #pluck {
   border: none;
   border-radius: 0.8rem;

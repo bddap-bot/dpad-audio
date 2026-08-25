@@ -1,6 +1,8 @@
-// Bus bitcrush for the post-fx panel — same decimation/quantization formulas
-// as the per-note crush in synth.js (hold = 1+11·amt samples, 12−8·amt bits),
-// but applied to the whole mix as a realtime chain stage.
+// Bus bitcrush for the post-fx panel — the same decimation/quantization as
+// the per-note crush (crushParams in synth.js), applied to the whole mix as
+// a realtime chain stage.
+import { crushParams } from './synth.js';
+
 class CrushProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [{ name: 'amount', defaultValue: 0.25, minValue: 0, maxValue: 1 }];
@@ -14,9 +16,7 @@ class CrushProcessor extends AudioWorkletProcessor {
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     const output = outputs[0];
-    const amt = parameters.amount[0];
-    const hold = 1 + Math.floor(amt * 11);
-    const levels = Math.pow(2, 11 - 8 * amt);
+    const { hold, levels } = crushParams(parameters.amount[0]);
     for (let ch = 0; ch < output.length; ch++) {
       const src = input[ch];
       const dst = output[ch];

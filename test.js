@@ -28,7 +28,7 @@ assert.ok(Math.abs(at(20).crush - 1 / 3) < 1e-6, 'crush holds');
 
 // Presses stay on the scale (root A2 = 110 — heldbreath voices an octave down).
 for (const p of [[], ['U'], ['U', 'U'], ['D', 'L', 'R']]) {
-  const f = heldbreath(state(p), 'U').freq;
+  const f = heldbreath(state(p), 'U').freqHz;
   const semis = 12 * Math.log2(f / 110);
   const folded = ((Math.round(semis) % 12) + 12) % 12;
   assert.ok(Math.abs(semis - Math.round(semis)) < 1e-3 && HIRAJOSHI.includes(folded));
@@ -61,18 +61,7 @@ assert.ok(!HIRAJOSHI.includes(((Math.round(badSemis) % 12) + 12) % 12), 'lands O
 
 // The synth terminates, stays clamped with headroom, and actually sounds.
 const deep = heldbreath(state(Array(12).fill('D')), 'U');
-const notes = [
-  {
-    onsetS: 0,
-    freqHz: deep.freq,
-    detuneCents: deep.detuneCents,
-    tauS: deep.timbre.decay / 7,
-    brightness: deep.timbre.brightness,
-    crush: deep.crush,
-    gain: deep.gain,
-  },
-  ...resolve(state(['U']), true),
-];
+const notes = [{ onsetS: 0, ...deep }, ...resolve(state(['U']), true)];
 const samples = renderPhrase(notes, 44100);
 assert.ok(samples.length > 0 && samples.length < 10 * 44100, 'runaway tail');
 let peak = 0;

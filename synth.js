@@ -14,6 +14,16 @@ const PARTIAL_BASE = [1.0, 0.25, 0.08];
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
+// Crush intensity → sample-hold decimation + amplitude quantization. The 25%
+// entry point holds every 3rd sample at ~10 bits; full crush ~4 bits. Shared
+// with crush-worklet.js so the per-note and bus crush can't drift apart.
+export function crushParams(amt) {
+  return {
+    hold: 1 + Math.floor(amt * 11),
+    levels: Math.pow(2, 12 - 8 * amt - 1),
+  };
+}
+
 // A NoteSpec mirrors the game's: { onsetS, freqHz, detuneCents, tauS,
 // brightness 0..1, crush 0..1, gain }. tauS is the amplitude time constant;
 // the note rings ~7τ (the page-facing "decay to silence" is 7× this).
@@ -38,16 +48,7 @@ function makeVoice(spec, sr) {
       partials.push({ phase: 0, inc: (2 * Math.PI * hz) / sr, amp: amp * level, decay });
     }
   });
-  // Crush intensity → sample-hold decimation + amplitude quantization. The
-  // 25% entry point holds every 3rd sample at ~10 bits; full crush ~4 bits.
-  const crush = crushAmt > 0
-    ? {
-        hold: 1 + Math.floor(crushAmt * 11),
-        levels: Math.pow(2, 12 - 8 * crushAmt - 1),
-        held: 0,
-        holdLeft: 0,
-      }
-    : null;
+  const crush = crushAmt > 0 ? { ...crushParams(crushAmt), held: 0, holdLeft: 0 } : null;
   return {
     start,
     end: start + Math.floor(spec.tauS * 7 * sr),

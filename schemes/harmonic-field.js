@@ -27,14 +27,13 @@ export default function harmonicField(state, press) {
   // chord root at lattice x = scale degree 2x (a third-stack's foot)
   const deg = chordAxis ? 2 * x - state.scale.length : y;
   return {
-    freq: degreeToFreq(deg, state.scale, state.rootHz),
+    freqHz: degreeToFreq(deg, state.scale, state.rootHz),
     // deeper = hazier and darker
     detuneCents: Math.min(depth, 8) * 1.3,
+    tauS: (chordAxis ? 1.6 : 0.9) / 7, // pad register rings longer than the lead
+    brightness: Math.max(0.25, 1 - depth * 0.09) * (chordAxis ? 0.6 : 1),
+    crush: 0,
     gain: chordAxis ? 0.7 : 0.85,
-    timbre: {
-      decay: chordAxis ? 1.6 : 0.9, // pad register rings longer than the lead
-      brightness: Math.max(0.25, 1 - depth * 0.09) * (chordAxis ? 0.6 : 1),
-    },
   };
 }
 

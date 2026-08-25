@@ -48,14 +48,12 @@ export default function heldbreath(state, press) {
   const region = REGION_BRIGHTNESS[state.path[0] ?? press];
   const degs = walk([...state.path, press], state.scale);
   return {
-    freq: degreeToFreq(degs[degs.length - 1], state.scale, rootOf(state)),
+    freqHz: degreeToFreq(degs[degs.length - 1], state.scale, rootOf(state)),
     detuneCents: MAX_DETUNE_CENTS * tensionDetune(depth),
+    tauS: Math.max(0.4, 1.1 - 0.08 * depth) / 7, // breath tightens with depth
+    brightness: Math.max(0.15, region - 0.06 * depth),
     crush: tensionCrush(depth),
     gain: 0.8,
-    timbre: {
-      decay: Math.max(0.4, 1.1 - 0.08 * depth), // breath tightens with depth
-      brightness: Math.max(0.15, region - 0.06 * depth),
-    },
   };
 }
 
