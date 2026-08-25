@@ -20,6 +20,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const CONF = {
   scheme: 'drift',
   scale: 'insen',
+  sidebar: true,
   devOpen: true,
   fxOpen: true,
   dev: { pitch: 24, crush: 0.5 },
@@ -95,7 +96,7 @@ try {
   if (s1.scheme !== 'drift') fail('scheme: ' + s1.scheme);
   if (s1.scale !== 'insen') fail('scale: ' + s1.scale);
   if (!s1.devOpen || !s1.fxOpen) fail('devOpen/fxOpen did not open the panels');
-  if (!s1.sbOpen) fail('sidebar closed despite open panels');
+  if (!s1.sbOpen) fail('sidebar=true not applied');
   if (s1.masterOrder.join() !== CONF.master.order.join())
     fail('master rack order: ' + s1.masterOrder.join());
   if (s1.layerOrders.length !== 3) fail('expected 3 layer racks, got ' + s1.layerOrders.length);
@@ -151,6 +152,12 @@ try {
     fail('round-trip mismatch:\nA=' + JSON.stringify(s1) + '\nB=' + JSON.stringify(s2));
   f2.remove();
 
+  // Import refuses a typo'd key loudly instead of silently dropping it.
+  w1.document.getElementById('cfg-text').value = JSON.stringify({ scheme: 'fixed', vibrate: 9 });
+  w1.document.getElementById('cfg-import').click();
+  const rejMsg = w1.document.getElementById('cfg-msg').textContent;
+  if (!rejMsg.includes('unknown keys: vibrate')) fail('typo import not refused: "' + rejMsg + '"');
+
   // Import applies a pasted config (replace semantics) via reload.
   w1.document.getElementById('cfg-text').value = JSON.stringify({ scheme: 'fixed', devOpen: true });
   const reloaded = new Promise((res, rej) => {
@@ -163,6 +170,10 @@ try {
   if (w1b.document.getElementById('scheme-picker').value !== 'fixed')
     fail('import did not apply scheme=fixed');
   if (!w1b.document.getElementById('dev-panel').open) fail('import did not apply devOpen');
+  // JSON path has NO open-panel⇒sidebar inference (it would break round-trip
+  // identity for {panel open, sidebar closed}); only the #dev=1 shorthand infers.
+  if (w1b.document.body.classList.contains('sb-open'))
+    fail('JSON config without sidebar:true opened the sidebar (inference leak)');
   if (w1b.document.getElementById('scale-picker').value !== 'hirajoshi')
     fail('import is a patch, not a replace — scale should be back at default');
   f1.remove();

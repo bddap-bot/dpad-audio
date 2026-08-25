@@ -5,8 +5,8 @@ note, so entering a combo is playing a melody. Mappings are pure functions
 `(comboState, press) -> soundEvent` in `schemes/` — combo state carries the
 path so far, depth, and unlock set, so a scheme can vary pitch, detune, and
 timbre with where you are in combo space, not just which key you hit. Pick
-scheme and scale from the page (or `#scheme=drift&scale=insen`); adding a
-scheme is one new file plus one registry line in `app.js`.
+scheme and scale from the page; adding a scheme is one new file plus one
+registry line in `app.js`.
 
 The synth (`synth.js`) is a buffer-rendered port of the in-game instrument
 (`bddap/rl` `crab-world/src/instrument.rs` — the source of truth): additive
@@ -31,9 +31,12 @@ and exports the same object the hash carries, as editable JSON.
 **Config schema** — the whole page state is ONE JSON object; the URL hash
 carries it URL-encoded (`#%7B%22scheme%22...`), and the config panel's
 import/export moves the identical object as text — one schema, three doors.
-This is the interface the in-game chain is rebuilt from. Fields equal to
+This is the interface the in-game chain is rebuilt from — the game-facing
+fields are `scheme`, `scale`, `layers`, and `master`; `sidebar`/`devOpen`/
+`fxOpen`/`dev` are page-only chrome a consumer ignores. Fields equal to
 their default are omitted (a URL/export holds only what changed; import uses
-replace semantics — missing fields reset to defaults):
+replace semantics — missing fields reset to defaults, unknown keys are
+refused):
 
 ```jsonc
 {
@@ -74,8 +77,9 @@ full-sine, parabola, cubic, round-square, fold, organ, hollow, bright, bell,
 stairs, chirp, glass.
 
 One non-JSON hash form survives as a hand-typed shorthand: `#dev=1&fx=1`
-(and `sb=1`) just opens the panels. Absent an explicit `sidebar`, an open
-panel implies an open sidebar.
+(and `sb=1`) just opens the panels (and, absent `sb`, the sidebar with
+them). The JSON path takes `sidebar` literally — no inference, so a config
+round-trips to identical state.
 
 The dev sliders shape the *test note* the pluck button fires; the layers shape
 *every* note (scheme presses, cadences, and the pluck).

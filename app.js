@@ -76,7 +76,7 @@ const fromSliders = (defs) => Object.fromEntries(defs.map((s) => [s.key, s.def])
 function rackDefaults(rack) {
   const stages = {};
   for (const st of rack.stages) {
-    stages[st.key] = { on: false, wet: st.wetAmt, ...Object.fromEntries(st.params.map((p) => [p.key, p.def])) };
+    stages[st.key] = { on: false, wet: st.defWet, ...Object.fromEntries(st.params.map((p) => [p.key, p.def])) };
   }
   return { order: [...DEFAULT_ORDER], stages };
 }
@@ -163,14 +163,14 @@ try {
 } catch {} // a stray % in a hand-edited hash — fall through to defaults
 if (!over && rawHash) {
   // Hand-typed gate shorthand — the ONE non-JSON hash form: #dev=1 / #fx=1
-  // (/ #sb=1) opens the panels, nothing else decodes here.
+  // (/ #sb=1) opens the panels, nothing else decodes here. The open-panel⇒
+  // open-sidebar inference lives HERE only: in the JSON path it would break
+  // round-trip identity (sidebar:false prunes away, then un-infers to open).
   const p = new URLSearchParams(rawHash);
   over = { devOpen: p.get('dev') === '1', fxOpen: p.get('fx') === '1' };
-  if (p.has('sb')) over.sidebar = p.get('sb') !== '0';
+  over.sidebar = p.has('sb') ? p.get('sb') !== '0' : over.devOpen || over.fxOpen;
 }
 const cfg = merged(DEFAULTS, over ?? {});
-// Absent an explicit `sidebar`, an open panel implies an open sidebar.
-if (!isObj(over) || over.sidebar === undefined) cfg.sidebar = cfg.sidebar || cfg.devOpen || cfg.fxOpen;
 cfg.scheme = pick(SCHEMES, cfg.scheme, DEFAULTS.scheme);
 cfg.scale = pick(SCALES, cfg.scale, DEFAULTS.scale);
 for (const s of DEV_SLIDERS) cfg.dev[s.key] = clampNum(cfg.dev[s.key], s);
@@ -548,7 +548,7 @@ function buildRackUI(rack, rcfg, root) {
     arrows.set(st, { up, down });
     legend.append(toggle, name, up, down);
     box.appendChild(legend);
-    const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01, def: st.wetAmt };
+    const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01, def: st.defWet };
     sc.wet = clampNum(sc.wet, wetP);
     st.setWet(sc.wet);
     box.appendChild(
@@ -659,14 +659,36 @@ function buildRackUI(rack, rcfg, root) {
       () => {},
     );
   });
+  // Hash decode is lenient (an unknown key in a URL self-corrects to the
+  // default), but import is a hand-edited interface: a typo'd key silently
+  // ignored would read as "no audible change, no explanation" — refuse it.
+  function unknownKeys(def, over, path) {
+    if (isObj(def) && isObj(over)) {
+      return Object.keys(over).flatMap((k) =>
+        Object.hasOwn(def, k) ? unknownKeys(def[k], over[k], path + k + '.') : [path + k],
+      );
+    }
+    if (Array.isArray(def) && Array.isArray(over) && def.length && isObj(def[0])) {
+      return over.flatMap((o, i) => (i < def.length ? unknownKeys(def[i], o, path + i + '.') : [path + i]));
+    }
+    return [];
+  }
   onActivate(document.getElementById('cfg-import'), () => {
     const v = parseConfig(text.value);
     if (!v) {
       msg.textContent = 'not a JSON object';
       return;
     }
+    const unknown = unknownKeys(DEFAULTS, v, '');
+    if (unknown.length) {
+      msg.textContent = 'unknown keys: ' + unknown.join(', ');
+      return;
+    }
     // Import REPLACES the whole config (missing fields = defaults). The
-    // hash is the one decode path, so apply by writing it and reloading.
+    // hash is the one decode path, so apply by writing it and reloading —
+    // after killing any pending debounced save, which would otherwise fire
+    // during navigation and clobber the imported hash with the old state.
+    clearTimeout(hashTimer);
     const p = pruned(DEFAULTS, merged(DEFAULTS, v));
     location.hash = p ? encodeURIComponent(JSON.stringify(p)) : '';
     location.reload();

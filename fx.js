@@ -12,8 +12,8 @@
 import { WAVE_NAMES, makePeriodicWave } from './waves.js';
 
 // `lazy: true` = apply on slider release, not per-pixel (for expensive sets).
-// Param key 'wet' is reserved (the stage's wet slider claims <prefix><key>-wet)
-// and so is stage key 'order' (<prefix>order carries the rack order).
+// Param key 'wet' is reserved (the wet slider claims it in each stage's
+// config object) and so is `order` at the rack level (the chain order list).
 function param(key, label, min, max, step, def, set, opts = {}) {
   return { key, label, min, max, step, def, set, ...opts };
 }
@@ -39,6 +39,7 @@ function makeStage(ctx, key, label, defWet) {
     dry,
     params: [],
     enabled: false,
+    defWet, // immutable default; wetAmt below is the live value
     wetAmt: defWet,
     setEnabled(on) {
       this.enabled = on;
@@ -266,7 +267,7 @@ const STAGE_MAKERS = {
 };
 export const DEFAULT_ORDER = Object.keys(STAGE_MAKERS);
 
-// A rack: the six stages chained between `input` and `output` in the given
+// A rack: the stages chained between `input` and `output` in the given
 // order. `stages` is mutable (reorder = swap entries, then rewire()) —
 // rewire touches only inter-stage edges, so external connections on
 // `input`/`output` survive.
