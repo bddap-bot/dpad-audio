@@ -36,11 +36,16 @@
     <button id="reject" aria-label="reject cadence">✗ reject</button>
   </div>
 
-  <footer>arrow keys work too · enter ✓ / backspace ✗ · path auto-clears after a pause</footer>
+  <footer>arrows or wasd · c / enter ✓ · x / backspace ✗ · path auto-clears after a pause</footer>
 </main>
 
 <button id="sidebar-toggle" aria-label="toggle controls sidebar" aria-expanded="false" aria-controls="sidebar">🎛</button>
 <aside id="sidebar" aria-label="controls" inert>
+  <details id="sliders-panel">
+    <summary>custom sliders — mod sources</summary>
+    <div id="sliders-controls"></div>
+  </details>
+
   <details id="dev-panel">
     <summary>dev mode — free play</summary>
     <div id="dev-controls"></div>
@@ -64,6 +69,7 @@
     </div>
   </details>
 </aside>
+<div id="mod-menu" hidden></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

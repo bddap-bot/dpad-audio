@@ -32,8 +32,9 @@ and exports the same object the hash carries, as editable JSON.
 carries it URL-encoded (`#%7B%22scheme%22...`), and the config panel's
 import/export moves the identical object as text — one schema, three doors.
 This is the interface the in-game chain is rebuilt from — the game-facing
-fields are `scheme`, `scale`, `layers`, and `master`; `sidebar`/`devOpen`/
-`fxOpen`/`dev` are page-only chrome a consumer ignores. Fields equal to
+fields are `scheme`, `scale`, `layers`, `master`, `mods`, and `sliders`;
+`sidebar`/`devOpen`/`fxOpen`/`slOpen`/`dev` are page-only chrome a consumer
+ignores. Fields equal to
 their default are omitted (a URL/export holds only what changed; import uses
 replace semantics — missing fields reset to defaults, unknown keys are
 refused):
@@ -42,11 +43,13 @@ refused):
 {
   "scheme": "heldbreath",        // schemes/ key
   "scale": "hirajoshi",
-  "sidebar": false, "devOpen": false, "fxOpen": false,  // UI open state
+  "sidebar": false, "devOpen": false, "fxOpen": false, "slOpen": false,  // UI open state
   "dev": { "pitch": 12, "detune": 0, "decay": 1.1,      // dev-mode pluck
            "bright": 0.55, "crush": 0, "gain": 0.8 },
   "master": RACK,                // master post-fx
-  "layers": [ LAYER, LAYER, LAYER ]
+  "layers": [ LAYER, LAYER, LAYER ],
+  "sliders": [ { "name": "", "value": 0 }, ... ],  // 4 custom mod-source sliders (0..1)
+  "mods": { "<param path>": MAPPING, ... }         // per-slider mod mappings
 }
 
 LAYER = {
@@ -67,6 +70,38 @@ RACK = {
                          "time": 0.31, "fb": 0.4 } }
 }
 ```
+
+MAPPING = {
+  "src": "none",                 // none | adsr | lfo | midi | slider
+  "wave": "sine", "rate": 1,     // lfo: waves.js wave + Hz (0.05..20)
+  "a": 0.01, "d": 0.2, "s": 0.7, "r": 0.3,  // adsr seconds / sustain level
+  "field": "progress",           // midi: progress | pitch | gate | gain | brightness | crush
+  "slot": 0,                     // slider: custom-slider index 0..3
+  "offset": 0,                   // -1..0
+  "amount": 1,                   // -2..2
+  "min": 0, "max": 1             // -2..2
+}
+```
+
+**Mod mappings** (dpad-audio#4): every numeric slider (dev, layer, and each
+rack param incl. `wet`) can be modulated — the ◇ button beside a slider opens
+the mapping menu. `mods` keys are param paths: `dev.<key>`, `l<1|2|3>.<key>`,
+`master.<stage>.<wet|param>`, `l<n>.fx.<stage>.<wet|param>` (select params
+like `filter.type` aren't mappable). One evaluation path (`mod.js`), applied
+in the param's normalized 0..1 slider space (log params in log space):
+
+    applied = clamp01( clamp( norm(base) + offset + amount·src, min, max ) )
+
+with `src` in 0..1: `adsr` follows a gate that opens on each press and closes
+when the path clears (✓/✗ or the idle timeout); `lfo` free-runs `wave` at
+`rate` Hz; `midi` reads the named per-note field, published at each press;
+`slider` reads a custom slider. Dev and layer params sample the mapping at
+note trigger (unmapped params keep the exact per-note transform semantics);
+live FX params re-evaluate continuously. The base slider keeps showing the
+unmodulated value.
+
+Keyboard: arrows or `wasd` play the d-pad; `c`/`Enter` accept, `x`/`Backspace`
+reject, `Esc` clears.
 
 Stage params: `crush` amt; `filter` type/cut/q; `chorus` rate/depth/base;
 `phaser` rate/depth; `ringmod` wave/freq; `distort` drive; `delay` time/fb;

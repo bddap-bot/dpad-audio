@@ -264,3 +264,37 @@ footer { font-size: 0.7rem; color: #44445f; text-align: center; flex-shrink: 0; 
 
 .cfg-actions button { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
 #cfg-msg { font-size: 0.7rem; color: #6f6f92; }
+
+.mod-btn {
+  border: none;
+  background: none;
+  color: #55557a;
+  font-size: 0.85rem;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mod-btn.mapped { color: #9d9dd8; text-shadow: 0 0 8px #7c7cff; }
+
+#mod-menu {
+  position: fixed;
+  z-index: 7;
+  width: min(19rem, calc(100vw - 1rem));
+  background: #16162a;
+  border: 1px solid #3c3c66;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  box-shadow: 0 6px 24px #00000090;
+}
+.mod-head { font-size: 0.7rem; color: #6f6f92; padding-bottom: 0.2rem; }
+
+.sl-name {
+  width: 7.5rem;
+  flex-shrink: 0;
+  background: #0e0e1c;
+  color: #9d9dd8;
+  border: 1px solid #22223a;
+  border-radius: 4px;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.7rem;
+}

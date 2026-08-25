@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import heldbreath, { resolve } from './schemes/heldbreath.js';
 import { renderPhrase } from './synth.js';
 import { WAVE_NAMES, waveFn } from './waves.js';
+import { MOD_DEFAULT, mapValue, lfoLevel, adsrLevel } from './mod.js';
 
 const HIRAJOSHI = [0, 2, 3, 7, 8];
 const state = (path) => ({
@@ -126,6 +127,39 @@ for (const r of [square, vib]) {
     p = Math.max(p, Math.abs(s));
   }
   assert.ok(p > 0.05 && p < 0.99, `extended note peak out of range: ${p}`);
+}
+
+// --- mod mappings (dpad-audio#4): the one evaluation path in mod.js ---
+// applied = clamp01(clamp(norm(base) + offset + amount·src, min, max))
+const md = (over) => ({ ...MOD_DEFAULT, ...over });
+assert.equal(mapValue(md({}), 0.3, 0), 0.3, 'identity mapping leaves base alone');
+assert.equal(mapValue(md({ offset: -0.5, amount: 2, min: -2, max: 2 }), 0.5, 0.5), 1, 'clamp01 caps the top');
+assert.equal(mapValue(md({ amount: -2, min: -2 }), 0.2, 0.4), 0, 'clamp01 caps the bottom');
+assert.equal(mapValue(md({ min: 0.2, max: 0.8 }), 0.9, 0), 0.8, 'max window clamps');
+assert.equal(mapValue(md({ min: 0.2, max: 0.8 }), 0, 0), 0.2, 'min window clamps');
+
+// adsr piecewise: a=1 d=1 s=0.5 r=1, gate on at t=0, off at t=4.
+const env = md({ a: 1, d: 1, s: 0.5, r: 1 });
+const lv = (t) => adsrLevel(env, t, 0, 4);
+assert.equal(lv(-1), 0, 'silent before the gate');
+assert.equal(lv(0.5), 0.5, 'mid-attack');
+assert.equal(lv(1), 1, 'attack peak');
+assert.equal(lv(1.5), 0.75, 'mid-decay');
+assert.equal(lv(3), 0.5, 'sustain');
+assert.equal(lv(4.5), 0.25, 'mid-release');
+assert.equal(lv(6), 0, 'released');
+assert.equal(adsrLevel(md({ a: 0 }), 0, 0, null), 1, 'zero attack jumps, no NaN');
+assert.equal(adsrLevel(md({ r: 0 }), 5, 0, 4), 0, 'zero release cuts, no NaN');
+assert.equal(adsrLevel(env, 1, null, null), 0, 'no gate yet');
+
+// lfo: sine at 1 Hz — mid at t=0, peak at t=1/4; bounded for every wave.
+assert.ok(Math.abs(lfoLevel(md({ wave: 'sine' }), 0) - 0.5) < 0.01);
+assert.ok(Math.abs(lfoLevel(md({ wave: 'sine' }), 0.25) - 1) < 0.01);
+for (const wave of WAVE_NAMES) {
+  for (const t of [0, 0.1, 0.33, 0.7, 12.9]) {
+    const v = lfoLevel(md({ wave, rate: 3 }), t);
+    assert.ok(v >= 0 && v <= 1, `lfo ${wave} out of range at ${t}: ${v}`);
+  }
 }
 
 console.log('parity tests pass');

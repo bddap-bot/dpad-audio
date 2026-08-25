@@ -7,6 +7,7 @@ import harmonicField, { label as harmonicFieldLabel } from './schemes/harmonic-f
 import { renderPhrase } from './synth.js';
 import { buildRack, connectLimited, DEFAULT_ORDER } from './fx.js';
 import { WAVE_NAMES } from './waves.js';
+import { MOD_SOURCES, MIDI_FIELDS, MOD_DEFAULT, mapValue, lfoLevel, adsrLevel } from './mod.js';
 
 // Adding a scheme = one file in schemes/ + one entry here. `resolve` (optional)
 // gives the scheme completion cadences, triggered by the ✓/✗ buttons.
@@ -80,13 +81,34 @@ function rackDefaults(rack) {
   }
   return { order: [...DEFAULT_ORDER], stages };
 }
+// Every mappable param, enumerated up front so DEFAULTS.mods can carry one
+// default mapping per path — a typo'd path in an import is then an unknown
+// key like any other. Paths: dev.<key>, l<n>.<key>, master.<stage>.<wet|key>,
+// l<n>.fx.<stage>.<wet|key>. Select params aren't sliders, so no mapping.
+const MOD_PARAMS = new Map(); // path -> slider def (min/max/step/log)
+for (const s of DEV_SLIDERS) MOD_PARAMS.set(`dev.${s.key}`, s);
+for (const n of [1, 2, 3]) for (const s of LAYER_SLIDERS) MOD_PARAMS.set(`l${n}.${s.key}`, s);
+function registerRackMods(prefix, rack) {
+  for (const st of rack.stages) {
+    MOD_PARAMS.set(`${prefix}.${st.key}.wet`, { min: 0, max: 1, step: 0.01, def: st.defWet });
+    for (const p of st.params) if (p.kind !== 'select') MOD_PARAMS.set(`${prefix}.${st.key}.${p.key}`, p);
+  }
+}
+registerRackMods('master', master);
+layerRacks.forEach((r, i) => registerRackMods(`l${i + 1}.fx`, r));
+
 const DEFAULTS = {
   scheme: 'heldbreath',
   scale: 'hirajoshi',
   sidebar: false,
   devOpen: false,
   fxOpen: false,
+  slOpen: false,
   dev: fromSliders(DEV_SLIDERS),
+  // Four fixed custom-slider slots (0..1, namable) — fixed shape keeps the
+  // config machinery's exact unknown-key refusal.
+  sliders: [1, 2, 3, 4].map(() => ({ name: '', value: 0 })),
+  mods: Object.fromEntries([...MOD_PARAMS.keys()].map((k) => [k, { ...MOD_DEFAULT }])),
   master: rackDefaults(master),
   layers: [1, 2, 3].map((n) => ({
     // Layer 1 defaults to the identity transform, enabled; 2 and 3 start
@@ -178,6 +200,22 @@ for (const L of cfg.layers) {
   if (!WAVE_NAMES.includes(L.wave)) L.wave = 'sine';
   for (const s of LAYER_SLIDERS) L[s.key] = clampNum(L[s.key], s);
 }
+for (const sl of cfg.sliders) sl.value = clampNum(sl.value, { min: 0, max: 1, def: 0 });
+for (const m of Object.values(cfg.mods)) {
+  if (!MOD_SOURCES.includes(m.src)) m.src = MOD_DEFAULT.src;
+  if (!WAVE_NAMES.includes(m.wave)) m.wave = MOD_DEFAULT.wave;
+  if (!MIDI_FIELDS.includes(m.field)) m.field = MOD_DEFAULT.field;
+  m.rate = clampNum(m.rate, { min: 0.05, max: 20, def: MOD_DEFAULT.rate });
+  m.a = clampNum(m.a, { min: 0, max: 5, def: MOD_DEFAULT.a });
+  m.d = clampNum(m.d, { min: 0, max: 5, def: MOD_DEFAULT.d });
+  m.s = clampNum(m.s, { min: 0, max: 1, def: MOD_DEFAULT.s });
+  m.r = clampNum(m.r, { min: 0, max: 5, def: MOD_DEFAULT.r });
+  m.slot = Math.round(clampNum(m.slot, { min: 0, max: cfg.sliders.length - 1, def: 0 }));
+  m.offset = clampNum(m.offset, { min: -1, max: 0, def: MOD_DEFAULT.offset });
+  m.amount = clampNum(m.amount, { min: -2, max: 2, def: MOD_DEFAULT.amount });
+  m.min = clampNum(m.min, { min: -2, max: 2, def: MOD_DEFAULT.min });
+  m.max = clampNum(m.max, { min: -2, max: 2, def: MOD_DEFAULT.max });
+}
 
 // The URL write is debounced: Safari throws once history.replaceState
 // exceeds ~100 calls/30 s, which one slider drag would blow through.
@@ -203,18 +241,81 @@ cfg.layers.forEach((L, i) => applyOrder(layerRacks[i], L.fx));
 const layers = cfg.layers.map((vals, i) => ({ n: i + 1, rack: layerRacks[i], vals }));
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
-function layerNote(s, vals) {
+
+// --- mod mappings: sources + the applied-value lookup. The formula itself
+// (mod.js mapValue) works in the param's normalized 0..1 space; log params
+// normalize in log-space, matching their slider position. ---
+const tSlider = (p, v) => (p.log ? Math.log10(v) : v);
+const normP = (p, v) => (tSlider(p, v) - tSlider(p, p.min)) / (tSlider(p, p.max) - tSlider(p, p.min));
+const denormP = (p, n) => {
+  const v = tSlider(p, p.min) + n * (tSlider(p, p.max) - tSlider(p, p.min));
+  return p.log ? Math.pow(10, v) : v;
+};
+
+// Per-note fields the synth tracks, published as 0..1 for the midi source.
+const MIDI = { progress: 0, pitch: 0, gate: 0, gain: 0, brightness: 0, crush: 0 };
+let gateOnS = null; // adsr gate: press opens (retrigger), clear/cadence closes
+let gateOffS = null;
+const nowS = () => performance.now() / 1000;
+
+function srcValue(m) {
+  if (m.src === 'adsr') return adsrLevel(m, nowS(), gateOnS, gateOffS);
+  if (m.src === 'lfo') return lfoLevel(m, nowS());
+  if (m.src === 'midi') return MIDI[m.field];
+  if (m.src === 'slider') return cfg.sliders[m.slot].value;
+  return 0;
+}
+
+// Applied value for a mappable param: base when unmapped, so unmapped params
+// keep their exact per-note transform semantics.
+function mval(path, base) {
+  const m = cfg.mods[path];
+  if (m.src === 'none') return base;
+  return denormP(MOD_PARAMS.get(path), mapValue(m, normP(MOD_PARAMS.get(path), base), srcValue(m)));
+}
+
+// Live FX params re-evaluate on a tick (note-time params sample in
+// layerNote/devSpec instead). Lazy params (reverb IR rebuild) throttle.
+const FX_BIND = new Map(); // path -> { set, base, lazy }
+function bindRackMods(prefix, rack, rcfg) {
+  for (const st of rack.stages) {
+    const sc = rcfg.stages[st.key];
+    FX_BIND.set(`${prefix}.${st.key}.wet`, { set: (v) => st.setWet(v), base: () => sc.wet });
+    for (const p of st.params) {
+      if (p.kind === 'select') continue;
+      FX_BIND.set(`${prefix}.${st.key}.${p.key}`, { set: p.set, base: () => sc[p.key], lazy: p.lazy });
+    }
+  }
+}
+bindRackMods('master', master, cfg.master);
+cfg.layers.forEach((L, i) => bindRackMods(`l${i + 1}.fx`, layerRacks[i], L.fx));
+
+const lazyLast = new Map();
+setInterval(() => {
+  for (const [path, b] of FX_BIND) {
+    if (cfg.mods[path].src === 'none') continue;
+    if (b.lazy) {
+      const t = nowS();
+      if (t - (lazyLast.get(path) ?? -Infinity) < 0.3) continue;
+      lazyLast.set(path, t);
+    }
+    b.set(mval(path, b.base()));
+  }
+}, 33);
+
+function layerNote(s, L) {
+  const lv = (k) => mval(`l${L.n}.${k}`, L.vals[k]);
   return {
     ...s,
-    freqHz: s.freqHz * Math.pow(2, vals.pitch / 12),
-    detuneCents: s.detuneCents + vals.detune,
-    tauS: s.tauS * vals.decay,
-    brightness: clamp01(s.brightness + vals.bright),
-    crush: clamp01(s.crush + vals.crush),
-    gain: s.gain * vals.gain,
-    wave: s.wave ?? vals.wave,
-    vibRateHz: (s.vibRateHz ?? 0) + vals.vibRate,
-    vibDepthCents: (s.vibDepthCents ?? 0) + vals.vibDepth,
+    freqHz: s.freqHz * Math.pow(2, lv('pitch') / 12),
+    detuneCents: s.detuneCents + lv('detune'),
+    tauS: s.tauS * lv('decay'),
+    brightness: clamp01(s.brightness + lv('bright')),
+    crush: clamp01(s.crush + lv('crush')),
+    gain: s.gain * lv('gain'),
+    wave: s.wave ?? L.vals.wave,
+    vibRateHz: (s.vibRateHz ?? 0) + lv('vibRate'),
+    vibDepthCents: (s.vibDepthCents ?? 0) + lv('vibDepth'),
   };
 }
 
@@ -234,7 +335,7 @@ function playPhrase(specs) {
   for (const L of layers) {
     if (!L.vals.on) continue;
     const rendered = renderPhrase(
-      scaled.map((s) => layerNote(s, L.vals)),
+      scaled.map((s) => layerNote(s, L)),
       ctx.sampleRate,
     );
     if (rendered.length === 0) continue;
@@ -272,7 +373,18 @@ let idleTimer = null;
 
 function press(dir) {
   ensureAudio();
-  playPhrase([SCHEMES[cfg.scheme].fn(comboState(), dir)]);
+  gateOnS = nowS(); // adsr retriggers per press; gate holds while a code is live
+  gateOffS = null;
+  const spec = SCHEMES[cfg.scheme].fn(comboState(), dir);
+  // Publish the midi fields BEFORE rendering, so a midi-mapped param hears
+  // the note that triggered it, not the previous one.
+  MIDI.gate = 1;
+  MIDI.progress = clamp01((path.length + 1) / 8);
+  MIDI.pitch = clamp01(Math.log2(spec.freqHz / 110) / 3); // 110..880 Hz → 0..1
+  MIDI.gain = clamp01(spec.gain);
+  MIDI.brightness = clamp01(spec.brightness);
+  MIDI.crush = clamp01(spec.crush);
+  playPhrase([spec]);
   path.push(dir);
   renderPath();
   clearTimeout(idleTimer);
@@ -295,6 +407,9 @@ function cadence(accepted) {
 function clearPath() {
   path = [];
   clearTimeout(idleTimer);
+  if (gateOffS == null) gateOffS = nowS();
+  MIDI.gate = 0;
+  MIDI.progress = 0;
   renderPath();
 }
 
@@ -359,26 +474,29 @@ onActivate(document.getElementById('clear'), clearPath);
 onActivate(document.getElementById('accept'), () => cadence(true));
 onActivate(document.getElementById('reject'), () => cadence(false));
 
-const KEYMAP = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R' };
+// WASD aliases the arrows; c/x alias ✓/✗ (dpad-audio#4) — letters dodge the
+// browser's own arrow/enter/backspace navigation.
+const KEYMAP = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R', w: 'U', s: 'D', a: 'L', d: 'R' };
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   // A focused slider/select/textarea/summary owns its keys.
   if (e.target.closest?.('input, select, textarea, button, summary')) return;
-  if (KEYMAP[e.key]) {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (KEYMAP[k]) {
     e.preventDefault();
-    press(KEYMAP[e.key]);
-  } else if (e.key === 'Enter') {
+    press(KEYMAP[k]);
+  } else if (k === 'Enter' || k === 'c') {
     cadence(true);
-  } else if (e.key === 'Backspace') {
+  } else if (k === 'Backspace' || k === 'x') {
     cadence(false);
-  } else if (e.key === 'Escape') {
+  } else if (k === 'Escape') {
     clearPath();
   }
 });
 
 // --- generic control rows (shared by the dev + fx panels) ---
 // Log-scaled sliders (filter cutoff) move in log-space; display stays real.
-function sliderRow(p, value, onInput, onChange) {
+function sliderRow(p, value, onInput, onChange, modPath) {
   const row = document.createElement('label');
   row.className = 'ctl-row';
   const name = document.createElement('span');
@@ -405,6 +523,7 @@ function sliderRow(p, value, onInput, onChange) {
   });
   if (onChange) input.addEventListener('change', () => onChange());
   row.append(name, input, readout);
+  if (modPath) row.appendChild(modButton(modPath));
   return row;
 }
 
@@ -425,6 +544,95 @@ function selectRow(p, value, onInput) {
   return row;
 }
 
+// --- mod mapping UI: a ◇ button on every mappable slider row opens the ONE
+// shared popup (rebuilt per open, emptied on close, so the DOM stays small
+// and the round-trip test's control census stays stable). ---
+const modBtnUpd = new Map(); // path -> icon refresh
+function modButton(path) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'mod-btn';
+  b.setAttribute('aria-label', `mod mapping: ${path}`);
+  const upd = () => {
+    const on = cfg.mods[path].src !== 'none';
+    b.textContent = on ? '◆' : '◇';
+    b.classList.toggle('mapped', on);
+  };
+  upd();
+  modBtnUpd.set(path, upd);
+  onActivate(b, () => openModMenu(path, b));
+  return b;
+}
+
+const modMenu = document.getElementById('mod-menu');
+let modMenuPath = null;
+function closeModMenu() {
+  modMenu.hidden = true;
+  modMenu.innerHTML = '';
+  modMenuPath = null;
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!modMenu.hidden && !modMenu.contains(e.target) && !e.target.closest?.('.mod-btn')) closeModMenu();
+});
+
+function openModMenu(path, anchor) {
+  const toggleOff = modMenuPath === path;
+  closeModMenu();
+  if (toggleOff) return;
+  modMenuPath = path;
+  const m = cfg.mods[path];
+  const set = (k) => (v) => {
+    m[k] = v;
+    save();
+  };
+  const head = document.createElement('div');
+  head.className = 'mod-head';
+  head.textContent = path;
+  const body = document.createElement('div');
+  const rebuild = () => {
+    body.innerHTML = '';
+    if (m.src === 'lfo') {
+      body.appendChild(selectRow({ label: 'wave', options: WAVE_NAMES }, m.wave, set('wave')));
+      body.appendChild(sliderRow({ label: 'rate (Hz)', min: 0.05, max: 20, step: 0.05, def: MOD_DEFAULT.rate }, m.rate, set('rate')));
+    } else if (m.src === 'adsr') {
+      body.appendChild(sliderRow({ label: 'attack (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.a }, m.a, set('a')));
+      body.appendChild(sliderRow({ label: 'decay (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.d }, m.d, set('d')));
+      body.appendChild(sliderRow({ label: 'sustain', min: 0, max: 1, step: 0.01, def: MOD_DEFAULT.s }, m.s, set('s')));
+      body.appendChild(sliderRow({ label: 'release (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.r }, m.r, set('r')));
+    } else if (m.src === 'midi') {
+      body.appendChild(selectRow({ label: 'field', options: MIDI_FIELDS }, m.field, set('field')));
+    } else if (m.src === 'slider') {
+      // Index-prefixed labels so duplicate names still address distinct slots.
+      const names = cfg.sliders.map((s, i) => `${i + 1} · ${s.name || `custom ${i + 1}`}`);
+      body.appendChild(selectRow({ label: 'slider', options: names }, names[m.slot], (v) => {
+        m.slot = names.indexOf(v);
+        save();
+      }));
+    }
+    if (m.src !== 'none') {
+      body.appendChild(sliderRow({ label: 'offset', min: -1, max: 0, step: 0.01, def: 0 }, m.offset, set('offset')));
+      body.appendChild(sliderRow({ label: 'amount', min: -2, max: 2, step: 0.01, def: 1 }, m.amount, set('amount')));
+      body.appendChild(sliderRow({ label: 'min', min: -2, max: 2, step: 0.01, def: 0 }, m.min, set('min')));
+      body.appendChild(sliderRow({ label: 'max', min: -2, max: 2, step: 0.01, def: 1 }, m.max, set('max')));
+    }
+  };
+  const srcSel = selectRow({ label: 'source', options: MOD_SOURCES }, m.src, (v) => {
+    m.src = v;
+    save();
+    modBtnUpd.get(path)();
+    // A live FX param falls back to its base the moment its mapping stops.
+    if (v === 'none') FX_BIND.get(path)?.set(FX_BIND.get(path).base());
+    rebuild();
+  });
+  rebuild();
+  modMenu.append(head, srcSel, body);
+  modMenu.hidden = false;
+  // Position under the button, clamped on-viewport (needs layout first).
+  const r = anchor.getBoundingClientRect();
+  modMenu.style.left = Math.max(8, Math.min(window.innerWidth - modMenu.offsetWidth - 8, r.right - modMenu.offsetWidth)) + 'px';
+  modMenu.style.top = Math.max(8, Math.min(window.innerHeight - modMenu.offsetHeight - 8, r.bottom + 6)) + 'px';
+}
+
 function wirePanel(id, key) {
   const el = document.getElementById(id);
   el.open = cfg[key];
@@ -434,18 +642,44 @@ function wirePanel(id, key) {
   });
 }
 
+// --- custom sliders: four namable 0..1 mod sources, at the top of the
+// sidebar ---
+{
+  wirePanel('sliders-panel', 'slOpen');
+  const root = document.getElementById('sliders-controls');
+  cfg.sliders.forEach((sl, i) => {
+    const row = sliderRow({ label: '', min: 0, max: 1, step: 0.01, def: 0 }, sl.value, (v) => {
+      sl.value = v;
+      save();
+    });
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'sl-name';
+    name.placeholder = `custom ${i + 1}`;
+    name.value = sl.name;
+    name.setAttribute('aria-label', `custom slider ${i + 1} name`);
+    name.addEventListener('input', () => {
+      sl.name = name.value;
+      save();
+    });
+    row.replaceChild(name, row.firstChild); // the label span → the name box
+    root.appendChild(row);
+  });
+}
+
 // --- dev mode: the full synth surface on sliders, no code entry needed ---
 const devVals = cfg.dev;
 
 function devSpec() {
+  const dv = (k) => mval(`dev.${k}`, devVals[k]);
   return {
     onsetS: 0,
-    freqHz: (ROOT_HZ / 2) * Math.pow(2, devVals.pitch / 12), // A2, the heldbreath register
-    detuneCents: devVals.detune,
-    tauS: devVals.decay / 7,
-    brightness: devVals.bright,
-    crush: devVals.crush,
-    gain: devVals.gain,
+    freqHz: (ROOT_HZ / 2) * Math.pow(2, dv('pitch') / 12), // A2, the heldbreath register
+    detuneCents: dv('detune'),
+    tauS: dv('decay') / 7,
+    brightness: dv('bright'),
+    crush: dv('crush'),
+    gain: dv('gain'),
   };
 }
 
@@ -458,7 +692,7 @@ function devPluck() {
 // layer must still make a sound, or it's a silent knob while tuning.
 function auditionLayer(L) {
   ensureAudio();
-  const rendered = renderPhrase([layerNote(devSpec(), L.vals)], ctx.sampleRate);
+  const rendered = renderPhrase([layerNote(devSpec(), L)], ctx.sampleRate);
   if (rendered.length > 0) playRendered(rendered, L.rack.input);
 }
 
@@ -470,7 +704,7 @@ function auditionLayer(L) {
       sliderRow(s, devVals[s.key], (v) => {
         devVals[s.key] = v;
         save();
-      }, devPluck),
+      }, devPluck, `dev.${s.key}`),
     );
   }
   onActivate(document.getElementById('pluck'), devPluck);
@@ -478,7 +712,7 @@ function auditionLayer(L) {
 
 // --- rack UI: one fieldset per stage, ▲▼ to reorder (audio graph + DOM +
 // the config's order list move together) ---
-function buildRackUI(rack, rcfg, root) {
+function buildRackUI(rack, rcfg, root, prefix) {
   const boxes = new Map(); // stage → its fieldset
   const arrows = new Map(); // stage → { up, down }
   const updateArrows = () => {
@@ -556,7 +790,7 @@ function buildRackUI(rack, rcfg, root) {
         st.setWet(v);
         sc.wet = v;
         save();
-      }),
+      }, null, `${prefix}.${st.key}.wet`),
     );
     for (const p of st.params) {
       if (p.kind === 'select') {
@@ -584,6 +818,7 @@ function buildRackUI(rack, rcfg, root) {
               save();
             },
             p.lazy ? () => p.set(pending) : null,
+            `${prefix}.${st.key}.${p.key}`,
           ),
         );
       }
@@ -597,7 +832,7 @@ function buildRackUI(rack, rcfg, root) {
 // --- master post-fx panel ---
 {
   wirePanel('fx-panel', 'fxOpen');
-  buildRackUI(master, cfg.master, document.getElementById('fx-controls'));
+  buildRackUI(master, cfg.master, document.getElementById('fx-controls'), 'master');
 }
 
 // --- layer panels: enable toggle in the summary, wave picker, param
@@ -633,7 +868,7 @@ function buildRackUI(rack, rcfg, root) {
         sliderRow(s, L.vals[s.key], (v) => {
           L.vals[s.key] = v;
           save();
-        }, () => auditionLayer(L)),
+        }, () => auditionLayer(L), `l${L.n}.${s.key}`),
       );
     }
     const fxDet = document.createElement('details');
@@ -641,7 +876,7 @@ function buildRackUI(rack, rcfg, root) {
     fxSum.textContent = `layer ${L.n} fx`;
     const fxRoot = document.createElement('div');
     fxDet.append(fxSum, fxRoot);
-    buildRackUI(L.rack, L.vals.fx, fxRoot);
+    buildRackUI(L.rack, L.vals.fx, fxRoot, `l${L.n}.fx`);
     det.appendChild(fxDet);
     root.appendChild(det);
   }

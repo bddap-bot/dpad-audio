@@ -51,6 +51,11 @@ const CONF = {
     },
     {},
   ],
+  sliders: [{ name: 'wob', value: 0.4 }, {}, {}, {}],
+  mods: {
+    'l2.pitch': { src: 'lfo', wave: 'triangle', rate: 2, amount: 0.5 },
+    'master.delay.time': { src: 'slider', slot: 0, offset: -0.2 },
+  },
 };
 const STATE = '#' + encodeURIComponent(JSON.stringify(CONF));
 
@@ -85,6 +90,8 @@ function readState(win) {
     sliders: [...d.querySelectorAll('input[type="range"]')].map((i) => i.value),
     checks: [...d.querySelectorAll('input[type="checkbox"]')].map((i) => i.checked),
     selects: [...d.querySelectorAll('select')].map((i) => i.value),
+    names: [...d.querySelectorAll('#sliders-controls input[type="text"]')].map((i) => i.value),
+    mapped: [...d.querySelectorAll('.mod-btn.mapped')].map((b) => b.getAttribute('aria-label')),
   };
 }
 
@@ -117,6 +124,28 @@ try {
   if (rmSel.options.length !== 20) fail('ring-mod wave picker has ' + rmSel.options.length + ' options');
   if (rmSel.value !== 'square') fail('ring-mod wave=square not applied: ' + rmSel.value);
 
+  // Mod mappings (dpad-audio#4): the custom-slider panel sits at the top of
+  // the sidebar, names round-trip, and mapped sliders show the filled icon.
+  const firstPanel = w1.document.querySelector('#sidebar > details');
+  if (firstPanel.id !== 'sliders-panel') fail('custom sliders not at sidebar top: ' + firstPanel.id);
+  if (s1.names.length !== 4) fail('expected 4 custom sliders, got ' + s1.names.length);
+  if (s1.names[0] !== 'wob') fail('custom slider name lost: ' + JSON.stringify(s1.names));
+  if (s1.mapped.length !== 2) fail('expected 2 mapped sliders, got ' + JSON.stringify(s1.mapped));
+  if (!s1.mapped.some((l) => l.includes('l2.pitch')) || !s1.mapped.some((l) => l.includes('master.delay.time')))
+    fail('wrong sliders mapped: ' + JSON.stringify(s1.mapped));
+  // The mapping menu opens from the icon and shows the LFO's controls.
+  const l2pitchBtn = [...w1.document.querySelectorAll('.mod-btn')].find(
+    (b) => b.getAttribute('aria-label') === 'mod mapping: l2.pitch',
+  );
+  l2pitchBtn.click();
+  const menu = w1.document.getElementById('mod-menu');
+  if (menu.hidden) fail('mod menu did not open');
+  const menuSelects = [...menu.querySelectorAll('select')].map((s) => s.value);
+  if (!menuSelects.includes('lfo')) fail('mod menu source select not on lfo: ' + menuSelects.join());
+  if (!menuSelects.includes('triangle')) fail('mod menu wave select not on triangle: ' + menuSelects.join());
+  l2pitchBtn.click();
+  if (!menu.hidden || menu.childElementCount) fail('mod menu did not close/empty on re-click');
+
   // Nudge a control twice (net no-op) so the app WRITES the hash, then check
   // the written JSON still carries the state.
   const nudge = w1.document.querySelector('#fx-controls .fx-stage input[type="checkbox"]');
@@ -137,6 +166,9 @@ try {
     if (enc.master?.order?.join() !== CONF.master.order.join()) fail('encoded hash lost master order');
     if (enc.layers?.[1]?.fx?.order?.join() !== CONF.layers[1].fx.order.join())
       fail('encoded hash lost layer 2 order');
+    if (enc.mods?.['l2.pitch']?.wave !== 'triangle') fail('encoded hash lost the l2.pitch mapping');
+    if (enc.mods?.['master.delay.time']?.offset !== -0.2) fail('encoded hash lost the delay-time mapping');
+    if (enc.sliders?.[0]?.name !== 'wob') fail('encoded hash lost the custom slider name');
   }
 
   // Export must produce the SAME object the hash carries.
