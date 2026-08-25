@@ -65,7 +65,9 @@ let idleTimer = null;
 
 // --- audio: notes render to buffers via the parity synth, then run through
 // the post-fx chain. Created suspended; first tap resumes (mobile unlock). ---
-const ctx = new (window.AudioContext || window.webkitAudioContext)();
+// No webkitAudioContext fallback: browsers that need the prefix predate the
+// ES modules and AudioWorklet this app requires anyway.
+const ctx = new AudioContext();
 const fx = buildFx(ctx);
 let livePhrases = 0;
 
@@ -174,24 +176,25 @@ setParam('scheme', schemeKey);
 setParam('scale', scaleKey);
 updateCadenceButtons();
 
-for (const btn of document.querySelectorAll('.key')) {
-  btn.addEventListener('pointerdown', (e) => {
+// pointerdown, not click, for press latency — but pointerdown's preventDefault
+// also suppresses click, so keyboard activation (click with detail 0) gets its
+// own path or Tab+Enter on a button would do nothing.
+function onActivate(el, fn) {
+  el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    press(btn.dataset.dir);
+    fn();
+  });
+  el.addEventListener('click', (e) => {
+    if (e.detail === 0) fn();
   });
 }
-document.getElementById('clear').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  clearPath();
-});
-document.getElementById('accept').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  cadence(true);
-});
-document.getElementById('reject').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  cadence(false);
-});
+
+for (const btn of document.querySelectorAll('.key')) {
+  onActivate(btn, () => press(btn.dataset.dir));
+}
+onActivate(document.getElementById('clear'), clearPath);
+onActivate(document.getElementById('accept'), () => cadence(true));
+onActivate(document.getElementById('reject'), () => cadence(false));
 
 const KEYMAP = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R' };
 window.addEventListener('keydown', (e) => {
@@ -300,10 +303,7 @@ function devPluck() {
       }, devPluck),
     );
   }
-  document.getElementById('pluck').addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    devPluck();
-  });
+  onActivate(document.getElementById('pluck'), devPluck);
 }
 
 // --- post-fx panel: one fieldset per chain stage ---
