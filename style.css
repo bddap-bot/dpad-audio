@@ -123,6 +123,49 @@ select {
 #pluck:active { background: #34346a; color: #ffffff; }
 #pluck { margin-top: 0.4rem; }
 
+#sidebar-toggle {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.75rem;
+  z-index: 6;
+  border: none;
+  border-radius: 0.8rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 1.1rem;
+  color: #b8b8e8;
+  background: #1a1a30;
+  box-shadow: inset 0 0 0 1px #2c2c4a;
+  -webkit-tap-highlight-color: transparent;
+}
+#sidebar-toggle:active { background: #34346a; color: #ffffff; }
+
+#sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100dvh;
+  width: min(24rem, 100vw);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #0e0e1a;
+  border-left: 1px solid #2c2c4a;
+  padding: calc(max(0.75rem, env(safe-area-inset-top)) + 2.6rem) 0.75rem
+    max(0.75rem, env(safe-area-inset-bottom));
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+}
+
+body.sb-open #sidebar { transform: none; }
+
+/* Wide screens: the open sidebar sits beside the d-pad, not over it. */
+@media (min-width: 60rem) {
+  body.sb-open main { margin-right: 24rem; }
+}
+
 details {
   width: 100%;
   max-width: 30rem;
@@ -132,6 +175,36 @@ details {
   border-radius: 0.6rem;
   padding: 0.5rem 0.75rem;
 }
+
+.layer-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #cfcfe8;
+}
+
+.layer-panel summary input[type="checkbox"] { accent-color: #5c5cb8; }
+
+.layer-panel > details {
+  border: none;
+  border-top: 1px solid #22223a;
+  border-radius: 0;
+  padding: 0.4rem 0 0;
+  margin-top: 0.4rem;
+}
+
+.rk-move {
+  border: none;
+  background: none;
+  color: #6f6f92;
+  font-size: 0.8rem;
+  padding: 0 0.35rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.rk-move:first-of-type { margin-left: auto; }
+.rk-move:disabled { opacity: 0.25; cursor: default; }
+.rk-move:not(:disabled):active { color: #ffffff; }
 
 summary { cursor: pointer; font-size: 0.8rem; color: #6f6f92; }
 

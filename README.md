@@ -14,12 +14,20 @@ partials, twin detuned voices, per-partial decay, bitcrush pre-gain, and
 polyphony attenuation. `heldbreath` is the shipped scheme; its ✓/✗ buttons
 trigger the completion cadences (exhale chord / deceptive cadence).
 
-Two exploration panels, both URL-addressable like everything else on the page
-(`#dev=1`, `#fx=1`; every slider syncs into the hash, so a sound you like is a
+All exploration controls live on a collapsible, independently scrolling
+sidebar (🎛), URL-addressable like everything else on the page (`#dev=1`,
+`#fx=1`, `#sb=1`; every control syncs into the hash, so a sound you like is a
 shareable link): **dev mode** puts the full synth surface on sliders — pitch,
-detune, decay, brightness, crush, gain — no code entry needed; **post-fx** is
-a bypassable wet/dry chain (bitcrush, resonant filter, chorus/flanger, phaser,
-delay, reverb) for picking effects by ear before anything ships in-game —
-nothing in it exists in-game yet.
+detune, decay, brightness, crush, gain — no code entry needed; **layers**
+stack up to three variants of every played note, each a transform (pitch/
+detune offsets, decay/gain multipliers) with its own effect rack, so a
+scheme's expressive curve passes through; **post-fx** racks are bypassable
+wet/dry chains (bitcrush, resonant filter, chorus/flanger, phaser, delay,
+reverb), reorderable with the ▲▼ buttons per effect — one master rack plus
+one per layer — for picking effects by ear before anything ships in-game —
+nothing in them exists in-game yet.
+
+Tests: `node test.js` (synth/scheme math parity) and `./dom-test.sh`
+(headless-chromium boot + hash round-trip; needs `chromium` on PATH).
 
 **Live: https://bddap-bot.github.io/dpad-audio/**

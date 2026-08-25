@@ -5,7 +5,7 @@ import heldbreath, { label as heldbreathLabel, resolve as heldbreathResolve } fr
 import patchwalk, { label as patchwalkLabel } from './schemes/patchwalk.js';
 import harmonicField, { label as harmonicFieldLabel } from './schemes/harmonic-field.js';
 import { renderPhrase } from './synth.js';
-import { buildFx } from './fx.js';
+import { buildRack, connectLimited, DEFAULT_ORDER } from './fx.js';
 
 // Adding a scheme = one file in schemes/ + one entry here. `resolve` (optional)
 // gives the scheme completion cadences, triggered by the ✓/✗ buttons.
@@ -64,11 +64,63 @@ let path = [];
 let idleTimer = null;
 
 // --- audio: notes render to buffers via the parity synth, then run through
-// the post-fx chain. Created suspended; first tap resumes (mobile unlock). ---
+// the post-fx racks. Created suspended; first tap resumes (mobile unlock). ---
 // No webkitAudioContext fallback: browsers that need the prefix predate the
 // ES modules and AudioWorklet this app requires anyway.
 const ctx = new AudioContext();
-const fx = buildFx(ctx);
+
+// Rack order in the hash: <prefix>order=comma,list. Unknown keys drop and
+// missing ones append in default order, so an old URL (no order param) and a
+// URL from a future stage-set both decode to something sensible.
+function decodeOrder(prefix) {
+  const raw = getParam(prefix + 'order');
+  if (!raw) return DEFAULT_ORDER;
+  const seen = raw.split(',').filter((k) => DEFAULT_ORDER.includes(k));
+  return [...new Set([...seen, ...DEFAULT_ORDER.filter((k) => !seen.includes(k))])];
+}
+
+// Master rack keeps the pre-#2 fx-* hash keys, so already-shared URLs decode
+// unchanged. Each layer rack feeds it: source → layer rack → master → limiter.
+const master = buildRack(ctx, decodeOrder('fx-'));
+connectLimited(ctx, master.output);
+
+// --- 3 synth layers (dpad-audio#2): a layer is a transform on every note
+// played (scheme presses, cadences, dev pluck) — pitch/detune offsets and
+// decay/gain multipliers, NOT absolute values, so a scheme's expressive
+// curve (tension detune/crush) passes through — plus that layer's own rack.
+// Layer 1 defaults to the identity transform, enabled; 2 and 3 start off, so
+// an old URL sounds exactly as it always did.
+const LAYER_SLIDERS = [
+  { key: 'pitch', label: 'pitch (semis ±)', min: -24, max: 24, step: 1, def: 0 },
+  { key: 'detune', label: 'detune (cents +)', min: 0, max: 100, step: 1, def: 0 },
+  { key: 'decay', label: 'decay ×', min: 0.25, max: 4, step: 0.05, def: 1 },
+  { key: 'bright', label: 'brightness ±', min: -1, max: 1, step: 0.01, def: 0 },
+  { key: 'crush', label: 'crush +', min: 0, max: 1, step: 0.01, def: 0 },
+  { key: 'gain', label: 'gain ×', min: 0, max: 1.5, step: 0.01, def: 1 },
+];
+
+const layers = [1, 2, 3].map((n) => {
+  const rack = buildRack(ctx, decodeOrder(`l${n}-fx-`));
+  rack.output.connect(master.input);
+  const vals = {};
+  for (const s of LAYER_SLIDERS) vals[s.key] = getNum(`l${n}-${s.key}`) ?? s.def;
+  const en = getParam(`l${n}`);
+  return { n, rack, vals, enabled: en === null ? n === 1 : en === '1' };
+});
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+function layerNote(s, vals) {
+  return {
+    ...s,
+    freqHz: s.freqHz * Math.pow(2, vals.pitch / 12),
+    detuneCents: s.detuneCents + vals.detune,
+    tauS: s.tauS * vals.decay,
+    brightness: clamp01(s.brightness + vals.bright),
+    crush: clamp01(s.crush + vals.crush),
+    gain: s.gain * vals.gain,
+  };
+}
+
 let livePhrases = 0;
 
 function ensureAudio() {
@@ -77,21 +129,30 @@ function ensureAudio() {
 
 function playPhrase(specs) {
   // Parity: attenuate new phrases by the count still sounding, keeping the
-  // summed output out of hard clipping on fast codes.
+  // summed output out of hard clipping on fast codes. Counted per phrase,
+  // not per layer — layers are one musical event.
   const atten = 1 / (1 + 0.3 * livePhrases);
-  const rendered = renderPhrase(
-    specs.map((s) => ({ ...s, gain: s.gain * atten })),
-    ctx.sampleRate,
-  );
-  if (rendered.length === 0) return;
-  const buf = ctx.createBuffer(1, rendered.length, ctx.sampleRate);
-  buf.copyToChannel(rendered, 0);
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  src.connect(fx.input);
-  livePhrases++;
-  src.onended = () => livePhrases--;
-  src.start();
+  const scaled = specs.map((s) => ({ ...s, gain: s.gain * atten }));
+  let sounding = 0;
+  for (const L of layers) {
+    if (!L.enabled) continue;
+    const rendered = renderPhrase(
+      scaled.map((s) => layerNote(s, L.vals)),
+      ctx.sampleRate,
+    );
+    if (rendered.length === 0) continue;
+    const buf = ctx.createBuffer(1, rendered.length, ctx.sampleRate);
+    buf.copyToChannel(rendered, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(L.rack.input);
+    sounding++;
+    src.onended = () => {
+      if (--sounding === 0) livePhrases--;
+    };
+    src.start();
+  }
+  if (sounding > 0) livePhrases++;
 }
 
 // --- combo state + press handling ---
@@ -306,37 +367,69 @@ function devPluck() {
   onActivate(document.getElementById('pluck'), devPluck);
 }
 
-// --- post-fx panel: one fieldset per chain stage ---
-{
-  wirePanel('fx-panel', 'fx');
-  const root = document.getElementById('fx-controls');
-  for (const st of fx.stages) {
+// --- rack UI: one fieldset per stage, ▲▼ to reorder (audio graph + DOM +
+// <prefix>order hash param move together) ---
+function buildRackUI(rack, prefix, root) {
+  const boxes = new Map(); // stage → its fieldset
+  const arrows = new Map(); // stage → { up, down }
+  const renderOrder = () => {
+    rack.stages.forEach((st, i) => {
+      root.appendChild(boxes.get(st)); // appendChild moves — reorders in place
+      arrows.get(st).up.disabled = i === 0;
+      arrows.get(st).down.disabled = i === rack.stages.length - 1;
+    });
+  };
+  const move = (st, delta) => {
+    const i = rack.stages.indexOf(st);
+    const j = i + delta;
+    if (j < 0 || j >= rack.stages.length) return;
+    [rack.stages[i], rack.stages[j]] = [rack.stages[j], rack.stages[i]];
+    rack.rewire();
+    renderOrder();
+    const order = rack.stages.map((s) => s.key).join(',');
+    setParam(prefix + 'order', order === DEFAULT_ORDER.join(',') ? null : order);
+  };
+  for (const st of rack.stages) {
     const box = document.createElement('fieldset');
     box.className = 'fx-stage';
+    box.dataset.key = st.key;
     const legend = document.createElement('legend');
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
-    toggle.checked = getParam(`fx-${st.key}`) === '1';
+    toggle.checked = getParam(`${prefix}${st.key}`) === '1';
     st.setEnabled(toggle.checked);
     toggle.addEventListener('change', () => {
       st.setEnabled(toggle.checked);
-      setParam(`fx-${st.key}`, toggle.checked ? '1' : null);
+      setParam(`${prefix}${st.key}`, toggle.checked ? '1' : null);
     });
     const name = document.createElement('span');
     name.textContent = st.label;
-    legend.append(toggle, name);
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'rk-move';
+    up.textContent = '▲';
+    up.setAttribute('aria-label', `move ${st.label} earlier in the chain`);
+    onActivate(up, () => move(st, -1));
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'rk-move';
+    down.textContent = '▼';
+    down.setAttribute('aria-label', `move ${st.label} later in the chain`);
+    onActivate(down, () => move(st, 1));
+    arrows.set(st, { up, down });
+    legend.append(toggle, name, up, down);
     box.appendChild(legend);
     const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01 };
-    const wet0 = getNum(`fx-${st.key}-wet`) ?? st.wetAmt;
+    const wet0 = getNum(`${prefix}${st.key}-wet`) ?? st.wetAmt;
     st.setWet(wet0);
     box.appendChild(
       sliderRow(wetP, wet0, (v) => {
         st.setWet(v);
-        setParam(`fx-${st.key}-wet`, v);
+        setParam(`${prefix}${st.key}-wet`, v);
       }),
     );
     for (const p of st.params) {
-      const k = `fx-${st.key}-${p.key}`;
+      const k = `${prefix}${st.key}-${p.key}`;
       if (p.kind === 'select') {
         const v0 = p.options.includes(getParam(k)) ? getParam(k) : p.def;
         if (v0 !== p.def) p.set(v0);
@@ -364,6 +457,71 @@ function devPluck() {
         );
       }
     }
-    root.appendChild(box);
+    boxes.set(st, box);
   }
+  renderOrder();
+}
+
+// --- master post-fx panel ---
+{
+  wirePanel('fx-panel', 'fx');
+  buildRackUI(master, 'fx-', document.getElementById('fx-controls'));
+}
+
+// --- layer panels: enable toggle in the summary, param sliders, own rack ---
+{
+  const root = document.getElementById('layers');
+  for (const L of layers) {
+    const det = document.createElement('details');
+    det.className = 'layer-panel';
+    const sum = document.createElement('summary');
+    const en = document.createElement('input');
+    en.type = 'checkbox';
+    en.checked = L.enabled;
+    en.setAttribute('aria-label', `layer ${L.n} on`);
+    // The checkbox lives in the summary; without this its click also
+    // toggles the <details>.
+    en.addEventListener('click', (e) => e.stopPropagation());
+    en.addEventListener('change', () => {
+      L.enabled = en.checked;
+      setParam(`l${L.n}`, L.enabled === (L.n === 1) ? null : L.enabled ? '1' : '0');
+    });
+    sum.append(en, ` layer ${L.n}`);
+    det.appendChild(sum);
+    for (const s of LAYER_SLIDERS) {
+      det.appendChild(
+        sliderRow(s, L.vals[s.key], (v) => {
+          L.vals[s.key] = v;
+          setParam(`l${L.n}-${s.key}`, v === s.def ? null : v);
+        }, devPluck),
+      );
+    }
+    const fxDet = document.createElement('details');
+    const fxSum = document.createElement('summary');
+    fxSum.textContent = `layer ${L.n} fx`;
+    const fxRoot = document.createElement('div');
+    fxDet.append(fxSum, fxRoot);
+    buildRackUI(L.rack, `l${L.n}-fx-`, fxRoot);
+    det.appendChild(fxDet);
+    root.appendChild(det);
+  }
+}
+
+// --- sidebar: collapsible, independently scrolling, hosts every panel.
+// Absent `sb`, it opens when a panel gate (#dev=1 / #fx=1) is present, so an
+// old shared URL still shows what it always showed. ---
+{
+  const btn = document.getElementById('sidebar-toggle');
+  const setOpen = (open) => {
+    document.body.classList.toggle('sb-open', open);
+    btn.textContent = open ? '✕' : '🎛';
+    btn.setAttribute('aria-expanded', String(open));
+  };
+  const sb = getParam('sb');
+  setOpen(sb === null ? getParam('dev') === '1' || getParam('fx') === '1' : sb === '1');
+  onActivate(btn, () => {
+    const open = !document.body.classList.contains('sb-open');
+    setOpen(open);
+    setParam('sb', open ? '1' : '0');
+  });
 }

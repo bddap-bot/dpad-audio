@@ -5,7 +5,8 @@
 // a neutral one. A limiter sits before the destination so no combination of
 // maxed settings (delay feedback + big reverb + crush) can get painful.
 //
-// Chain order: crush → filter → chorus → phaser → delay → reverb.
+// Default chain order: crush → filter → chorus → phaser → delay → reverb —
+// reorderable per rack (dpad-audio#2); the order serializes as <prefix>order.
 
 // `lazy: true` = apply on slider release, not per-pixel (for expensive sets).
 // Param key 'wet' is reserved — the stage's wet slider claims fx-<key>-wet.
@@ -186,17 +187,48 @@ function reverbStage(ctx) {
   return st;
 }
 
-// Build the chain and hook it between `input` and the destination.
-export function buildFx(ctx) {
+const STAGE_MAKERS = {
+  crush: crushStage,
+  filter: filterStage,
+  chorus: chorusStage,
+  phaser: phaserStage,
+  delay: delayStage,
+  reverb: reverbStage,
+};
+export const DEFAULT_ORDER = Object.keys(STAGE_MAKERS);
+
+// A rack: the six stages chained between `input` and `output` in the given
+// order. `stages` is mutable (reorder = swap entries, then rewire()) —
+// rewire touches only inter-stage edges, so external connections on
+// `input`/`output` survive.
+export function buildRack(ctx, order = DEFAULT_ORDER) {
   const input = ctx.createGain();
-  const stages = [crushStage, filterStage, chorusStage, phaserStage, delayStage, reverbStage].map(
-    (make) => make(ctx),
-  );
-  let node = input;
-  for (const st of stages) {
-    node.connect(st.input);
-    node = st.output;
-  }
+  const output = ctx.createGain();
+  const stages = order.map((k) => STAGE_MAKERS[k](ctx));
+  const rack = {
+    input,
+    output,
+    stages,
+    rewire() {
+      input.disconnect();
+      // Stage outputs' only outgoing edges are chain edges (dry/wet connect
+      // INTO them), so a blanket disconnect is safe.
+      for (const st of stages) st.output.disconnect();
+      let node = input;
+      for (const st of stages) {
+        node.connect(st.input);
+        node = st.output;
+      }
+      node.connect(output);
+    },
+  };
+  rack.rewire();
+  return rack;
+}
+
+// Limiter before the destination so no combination of maxed settings (delay
+// feedback + big reverb + crush, now ×4 racks) can get painful.
+export function connectLimited(ctx, node) {
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -3;
   limiter.knee.value = 0;
@@ -204,5 +236,4 @@ export function buildFx(ctx) {
   limiter.attack.value = 0.003;
   limiter.release.value = 0.25;
   node.connect(limiter).connect(ctx.destination);
-  return { input, stages };
 }
