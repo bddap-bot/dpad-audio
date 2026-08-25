@@ -284,21 +284,26 @@ cfg.layers.forEach((L, i) => bindRackMods(`l${i + 1}.fx`, layerRacks[i], L.fx));
 
 // No-change sets are skipped: expensive setters (reverb's IR rebuild is a
 // fresh RANDOM impulse per call, distortion's curve is 1024 points) must not
-// churn while a mapped source sits still. Lazy params additionally throttle,
-// bounding IR-rebuild clicks while a source IS moving.
+// churn while a mapped source sits still. The cache keys on (base, applied):
+// dragging the base slider device-sets directly, so a base change must
+// re-assert the mapped value even when a saturated mapping yields the same
+// applied number. Lazy params additionally throttle, bounding IR-rebuild
+// clicks while a source IS moving.
 const lastSet = new Map();
 const lazyLast = new Map();
 setInterval(() => {
   for (const [path, b] of FX_BIND) {
     if (cfg.mods[path].src === 'none') continue;
-    const v = mval(path, b.base());
-    if (lastSet.get(path) === v) continue;
+    const base = b.base();
+    const v = mval(path, base);
+    const prev = lastSet.get(path);
+    if (prev && prev.base === base && prev.v === v) continue;
     if (b.lazy) {
       const t = nowS();
       if (t - (lazyLast.get(path) ?? -Infinity) < 0.3) continue;
       lazyLast.set(path, t);
     }
-    lastSet.set(path, v);
+    lastSet.set(path, { base, v });
     b.set(v);
   }
 }, 33);
