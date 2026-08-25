@@ -10,6 +10,20 @@ export const MOD_SOURCES = ['none', 'adsr', 'lfo', 'midi', 'slider'];
 // Fields the synth tracks per note/sequence, published by app.js as 0..1.
 export const MIDI_FIELDS = ['progress', 'pitch', 'gate', 'gain', 'brightness', 'crush'];
 
+// Numeric-field ranges — the single source for the load-time clamps AND the
+// mapping menu's rows, so an imported value is never valid-but-unrepresentable.
+export const MOD_PROPS = {
+  rate: { label: 'rate (Hz)', min: 0.05, max: 20, step: 0.05 },
+  a: { label: 'attack (s)', min: 0, max: 2, step: 0.01 },
+  d: { label: 'decay (s)', min: 0, max: 2, step: 0.01 },
+  s: { label: 'sustain', min: 0, max: 1, step: 0.01 },
+  r: { label: 'release (s)', min: 0, max: 2, step: 0.01 },
+  offset: { label: 'offset', min: -1, max: 0, step: 0.01 },
+  amount: { label: 'amount', min: -2, max: 2, step: 0.01 },
+  min: { label: 'min', min: -2, max: 2, step: 0.01 },
+  max: { label: 'max', min: -2, max: 2, step: 0.01 },
+};
+
 export const MOD_DEFAULT = {
   src: 'none',
   wave: 'sine', // lfo: one of the waves.js 20

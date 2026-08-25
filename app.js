@@ -7,7 +7,7 @@ import harmonicField, { label as harmonicFieldLabel } from './schemes/harmonic-f
 import { renderPhrase } from './synth.js';
 import { buildRack, connectLimited, DEFAULT_ORDER } from './fx.js';
 import { WAVE_NAMES } from './waves.js';
-import { MOD_SOURCES, MIDI_FIELDS, MOD_DEFAULT, mapValue, lfoLevel, adsrLevel } from './mod.js';
+import { MOD_SOURCES, MIDI_FIELDS, MOD_DEFAULT, MOD_PROPS, mapValue, lfoLevel, adsrLevel } from './mod.js';
 
 // Adding a scheme = one file in schemes/ + one entry here. `resolve` (optional)
 // gives the scheme completion cadences, triggered by the ✓/✗ buttons.
@@ -205,16 +205,8 @@ for (const m of Object.values(cfg.mods)) {
   if (!MOD_SOURCES.includes(m.src)) m.src = MOD_DEFAULT.src;
   if (!WAVE_NAMES.includes(m.wave)) m.wave = MOD_DEFAULT.wave;
   if (!MIDI_FIELDS.includes(m.field)) m.field = MOD_DEFAULT.field;
-  m.rate = clampNum(m.rate, { min: 0.05, max: 20, def: MOD_DEFAULT.rate });
-  m.a = clampNum(m.a, { min: 0, max: 5, def: MOD_DEFAULT.a });
-  m.d = clampNum(m.d, { min: 0, max: 5, def: MOD_DEFAULT.d });
-  m.s = clampNum(m.s, { min: 0, max: 1, def: MOD_DEFAULT.s });
-  m.r = clampNum(m.r, { min: 0, max: 5, def: MOD_DEFAULT.r });
   m.slot = Math.round(clampNum(m.slot, { min: 0, max: cfg.sliders.length - 1, def: 0 }));
-  m.offset = clampNum(m.offset, { min: -1, max: 0, def: MOD_DEFAULT.offset });
-  m.amount = clampNum(m.amount, { min: -2, max: 2, def: MOD_DEFAULT.amount });
-  m.min = clampNum(m.min, { min: -2, max: 2, def: MOD_DEFAULT.min });
-  m.max = clampNum(m.max, { min: -2, max: 2, def: MOD_DEFAULT.max });
+  for (const [k, p] of Object.entries(MOD_PROPS)) m[k] = clampNum(m[k], { ...p, def: MOD_DEFAULT[k] });
 }
 
 // The URL write is debounced: Safari throws once history.replaceState
@@ -290,16 +282,24 @@ function bindRackMods(prefix, rack, rcfg) {
 bindRackMods('master', master, cfg.master);
 cfg.layers.forEach((L, i) => bindRackMods(`l${i + 1}.fx`, layerRacks[i], L.fx));
 
+// No-change sets are skipped: expensive setters (reverb's IR rebuild is a
+// fresh RANDOM impulse per call, distortion's curve is 1024 points) must not
+// churn while a mapped source sits still. Lazy params additionally throttle,
+// bounding IR-rebuild clicks while a source IS moving.
+const lastSet = new Map();
 const lazyLast = new Map();
 setInterval(() => {
   for (const [path, b] of FX_BIND) {
     if (cfg.mods[path].src === 'none') continue;
+    const v = mval(path, b.base());
+    if (lastSet.get(path) === v) continue;
     if (b.lazy) {
       const t = nowS();
       if (t - (lazyLast.get(path) ?? -Infinity) < 0.3) continue;
       lazyLast.set(path, t);
     }
-    b.set(mval(path, b.base()));
+    lastSet.set(path, v);
+    b.set(v);
   }
 }, 33);
 
@@ -373,8 +373,13 @@ let idleTimer = null;
 
 function press(dir) {
   ensureAudio();
-  gateOnS = nowS(); // adsr retriggers per press; gate holds while a code is live
-  gateOffS = null;
+  // The adsr gate opens at a code's FIRST press and holds until the path
+  // clears — successive notes then walk the envelope (a per-press retrigger
+  // would sample t≈0 every note, making a/d/s/r inaudible on note-time params).
+  if (path.length === 0) {
+    gateOnS = nowS();
+    gateOffS = null;
+  }
   const spec = SCHEMES[cfg.scheme].fn(comboState(), dir);
   // Publish the midi fields BEFORE rendering, so a midi-mapped param hears
   // the note that triggered it, not the previous one.
@@ -481,6 +486,8 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   // A focused slider/select/textarea/summary owns its keys.
   if (e.target.closest?.('input, select, textarea, button, summary')) return;
+  // Modifier chords (ctrl+c copy, cmd+a select-all…) belong to the browser.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (KEYMAP[k]) {
     e.preventDefault();
@@ -589,16 +596,14 @@ function openModMenu(path, anchor) {
   head.className = 'mod-head';
   head.textContent = path;
   const body = document.createElement('div');
+  const propRow = (k) => sliderRow({ ...MOD_PROPS[k], def: MOD_DEFAULT[k] }, m[k], set(k));
   const rebuild = () => {
     body.innerHTML = '';
     if (m.src === 'lfo') {
       body.appendChild(selectRow({ label: 'wave', options: WAVE_NAMES }, m.wave, set('wave')));
-      body.appendChild(sliderRow({ label: 'rate (Hz)', min: 0.05, max: 20, step: 0.05, def: MOD_DEFAULT.rate }, m.rate, set('rate')));
+      body.appendChild(propRow('rate'));
     } else if (m.src === 'adsr') {
-      body.appendChild(sliderRow({ label: 'attack (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.a }, m.a, set('a')));
-      body.appendChild(sliderRow({ label: 'decay (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.d }, m.d, set('d')));
-      body.appendChild(sliderRow({ label: 'sustain', min: 0, max: 1, step: 0.01, def: MOD_DEFAULT.s }, m.s, set('s')));
-      body.appendChild(sliderRow({ label: 'release (s)', min: 0, max: 2, step: 0.01, def: MOD_DEFAULT.r }, m.r, set('r')));
+      for (const k of ['a', 'd', 's', 'r']) body.appendChild(propRow(k));
     } else if (m.src === 'midi') {
       body.appendChild(selectRow({ label: 'field', options: MIDI_FIELDS }, m.field, set('field')));
     } else if (m.src === 'slider') {
@@ -609,19 +614,21 @@ function openModMenu(path, anchor) {
         save();
       }));
     }
-    if (m.src !== 'none') {
-      body.appendChild(sliderRow({ label: 'offset', min: -1, max: 0, step: 0.01, def: 0 }, m.offset, set('offset')));
-      body.appendChild(sliderRow({ label: 'amount', min: -2, max: 2, step: 0.01, def: 1 }, m.amount, set('amount')));
-      body.appendChild(sliderRow({ label: 'min', min: -2, max: 2, step: 0.01, def: 0 }, m.min, set('min')));
-      body.appendChild(sliderRow({ label: 'max', min: -2, max: 2, step: 0.01, def: 1 }, m.max, set('max')));
-    }
+    if (m.src !== 'none') for (const k of ['offset', 'amount', 'min', 'max']) body.appendChild(propRow(k));
   };
   const srcSel = selectRow({ label: 'source', options: MOD_SOURCES }, m.src, (v) => {
     m.src = v;
     save();
     modBtnUpd.get(path)();
-    // A live FX param falls back to its base the moment its mapping stops.
-    if (v === 'none') FX_BIND.get(path)?.set(FX_BIND.get(path).base());
+    // A live FX param falls back to its base the moment its mapping stops —
+    // and the tick's no-change cache forgets it, so a later remap can't be
+    // skipped as "already at that value".
+    const b = FX_BIND.get(path);
+    if (v === 'none' && b) {
+      b.set(b.base());
+      lastSet.delete(path);
+      lazyLast.delete(path);
+    }
     rebuild();
   });
   rebuild();

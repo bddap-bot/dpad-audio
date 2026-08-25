@@ -92,13 +92,16 @@ in the param's normalized 0..1 slider space (log params in log space):
 
     applied = clamp01( clamp( norm(base) + offset + amount·src, min, max ) )
 
-with `src` in 0..1: `adsr` follows a gate that opens on each press and closes
-when the path clears (✓/✗ or the idle timeout); `lfo` free-runs `wave` at
+with `src` in 0..1: `adsr` follows a gate that opens at a code's first press
+and closes when the path clears (✓/✗ or the idle timeout), so successive
+notes in a code walk the envelope; `lfo` free-runs `wave` at
 `rate` Hz; `midi` reads the named per-note field, published at each press;
 `slider` reads a custom slider. Dev and layer params sample the mapping at
 note trigger (unmapped params keep the exact per-note transform semantics);
 live FX params re-evaluate continuously. The base slider keeps showing the
-unmodulated value.
+unmodulated value. A `min` above `max` pins the result at `max`. An in-game
+consumer skips `dev.*` mapping paths along with `dev` itself (page-only
+chrome).
 
 Keyboard: arrows or `wasd` play the d-pad; `c`/`Enter` accept, `x`/`Backspace`
 reject, `Esc` clears.

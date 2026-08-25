@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import heldbreath, { resolve } from './schemes/heldbreath.js';
 import { renderPhrase } from './synth.js';
 import { WAVE_NAMES, waveFn } from './waves.js';
-import { MOD_DEFAULT, mapValue, lfoLevel, adsrLevel } from './mod.js';
+import { MOD_DEFAULT, MOD_PROPS, mapValue, lfoLevel, adsrLevel } from './mod.js';
 
 const HIRAJOSHI = [0, 2, 3, 7, 8];
 const state = (path) => ({
@@ -137,6 +137,11 @@ assert.equal(mapValue(md({ offset: -0.5, amount: 2, min: -2, max: 2 }), 0.5, 0.5
 assert.equal(mapValue(md({ amount: -2, min: -2 }), 0.2, 0.4), 0, 'clamp01 caps the bottom');
 assert.equal(mapValue(md({ min: 0.2, max: 0.8 }), 0.9, 0), 0.8, 'max window clamps');
 assert.equal(mapValue(md({ min: 0.2, max: 0.8 }), 0, 0), 0.2, 'min window clamps');
+assert.equal(mapValue(md({ min: 0.8, max: 0.2 }), 0.5, 0), 0.2, 'min>max pins at max (documented)');
+for (const [k, p] of Object.entries(MOD_PROPS)) {
+  assert.ok(k in MOD_DEFAULT && MOD_DEFAULT[k] >= p.min && MOD_DEFAULT[k] <= p.max,
+    `MOD_PROPS.${k} drifted from MOD_DEFAULT`);
+}
 
 // adsr piecewise: a=1 d=1 s=0.5 r=1, gate on at t=0, off at t=4.
 const env = md({ a: 1, d: 1, s: 0.5, r: 1 });
