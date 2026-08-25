@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import heldbreath, { resolve } from './schemes/heldbreath.js';
 import { renderPhrase } from './synth.js';
+import { WAVE_NAMES, waveFn } from './waves.js';
 
 const HIRAJOSHI = [0, 2, 3, 7, 8];
 const state = (path) => ({
@@ -84,6 +85,47 @@ for (const name of ['relative', 'drift', 'fixed', 'heldbreath', 'patchwalk', 'ha
   let p = 0;
   for (const s of r) p = Math.max(p, Math.abs(s));
   assert.ok(r.length > 0 && p > 0.02, `${name} press is silent: len=${r.length} peak=${p}`);
+}
+
+// --- waves (dpad-audio#3): 20 real, distinct, normalized shapes ---
+assert.equal(WAVE_NAMES.length, 20, 'exactly 20 wave types');
+const TAU = 2 * Math.PI;
+const M = 256;
+const sampled = WAVE_NAMES.map((n) => {
+  const f = waveFn(n);
+  return [...Array(M)].map((_, i) => f((TAU * i) / M));
+});
+sampled.forEach((s, i) => {
+  const mean = s.reduce((a, b) => a + b, 0) / M;
+  const peak = Math.max(...s.map(Math.abs));
+  assert.ok(Math.abs(mean) < 0.02, `${WAVE_NAMES[i]} has DC offset ${mean}`);
+  assert.ok(peak > 0.95 && peak <= 1.001, `${WAVE_NAMES[i]} peak ${peak} not normalized`);
+});
+for (let i = 0; i < sampled.length; i++) {
+  for (let j = i + 1; j < sampled.length; j++) {
+    const d = Math.max(...sampled[i].map((v, k) => Math.abs(v - sampled[j][k])));
+    assert.ok(d > 0.05, `waves ${WAVE_NAMES[i]} and ${WAVE_NAMES[j]} are near-identical (maxdiff ${d})`);
+  }
+}
+assert.equal(waveFn('nonsense')(Math.PI / 2), waveFn('sine')(Math.PI / 2), 'unknown wave falls back to sine');
+
+// --- NoteSpec extensions: wave + vibrato change the render, stay bounded ---
+const base = { onsetS: 0, freqHz: 220, detuneCents: 0, tauS: 0.15, brightness: 0.5, crush: 0, gain: 0.8 };
+const plain = renderPhrase([base], 44100);
+const square = renderPhrase([{ ...base, wave: 'square' }], 44100);
+const vib = renderPhrase([{ ...base, vibRateHz: 6, vibDepthCents: 50 }], 44100);
+assert.equal(plain.length, square.length);
+assert.equal(plain.length, vib.length);
+const maxdiff = (a, b) => Math.max(...[...a.keys()].map((i) => Math.abs(a[i] - b[i])));
+assert.ok(maxdiff(plain, square) > 0.01, 'wave type has no audible effect');
+assert.ok(maxdiff(plain, vib) > 0.01, 'vibrato has no audible effect');
+for (const r of [square, vib]) {
+  let p = 0;
+  for (const s of r) {
+    assert.ok(Number.isFinite(s));
+    p = Math.max(p, Math.abs(s));
+  }
+  assert.ok(p > 0.05 && p < 0.99, `extended note peak out of range: ${p}`);
 }
 
 console.log('parity tests pass');

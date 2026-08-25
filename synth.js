@@ -1,3 +1,5 @@
+import { waveFn } from './waves.js';
+
 // Buffer-rendered pluck synth, ported from the in-game instrument
 // (bddap/rl crab-world/src/instrument.rs) — parity with the game is the
 // contract, so notes are synthesized sample-by-sample with the same math
@@ -27,7 +29,10 @@ export function crushParams(amt) {
 // A NoteSpec mirrors the game's: { onsetS (optional, default 0), freqHz,
 // detuneCents, tauS, brightness 0..1, crush 0..1, gain }. tauS is the
 // amplitude time constant; the note rings ~7τ (the page-facing "decay to
-// silence" is 7× this).
+// silence" is 7× this). Playground extensions (dpad-audio#3), all optional
+// so game-parity specs pass through untouched: `wave` (a waves.js name,
+// default sine — the partials' oscillator shape), `vibRateHz` +
+// `vibDepthCents` (pitch vibrato on the whole note).
 function makeVoice(spec, sr) {
   const start = Math.floor((spec.onsetS ?? 0) * sr);
   const spread = Math.pow(2, spec.detuneCents / 2400); // voices sit ± half apart
@@ -50,6 +55,7 @@ function makeVoice(spec, sr) {
     }
   });
   const crush = crushAmt > 0 ? { ...crushParams(crushAmt), held: 0, holdLeft: 0 } : null;
+  const vibDepth = spec.vibDepthCents ?? 0;
   return {
     start,
     end: start + Math.floor(spec.tauS * 7 * sr),
@@ -57,16 +63,26 @@ function makeVoice(spec, sr) {
     gain: spec.gain,
     partials,
     crush,
+    wave: waveFn(spec.wave),
+    // Vibrato scales every partial's phase increment by the same factor, so
+    // the partial stack detunes together (pitch bend, not timbre wobble).
+    vib: vibDepth > 0 ? { phase: 0, inc: (2 * Math.PI * (spec.vibRateHz ?? 0)) / sr, amt: (vibDepth * Math.LN2) / 1200 } : null,
   };
 }
 
 function renderVoice(v, out) {
+  const wave = v.wave;
   for (let t = v.start; t < v.end && t < out.length; t++) {
     const attack = Math.min(1, (t - v.start) / v.attackSamples);
+    let vibMul = 1;
+    if (v.vib) {
+      vibMul = Math.exp(v.vib.amt * Math.sin(v.vib.phase));
+      v.vib.phase += v.vib.inc;
+    }
     let s = 0;
     for (const p of v.partials) {
-      s += Math.sin(p.phase) * p.amp;
-      p.phase = (p.phase + p.inc) % (2 * Math.PI);
+      s += wave(p.phase) * p.amp;
+      p.phase = (p.phase + p.inc * vibMul) % (2 * Math.PI);
       p.amp *= p.decay;
     }
     s *= attack;

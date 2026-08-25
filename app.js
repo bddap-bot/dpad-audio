@@ -6,6 +6,7 @@ import patchwalk, { label as patchwalkLabel } from './schemes/patchwalk.js';
 import harmonicField, { label as harmonicFieldLabel } from './schemes/harmonic-field.js';
 import { renderPhrase } from './synth.js';
 import { buildRack, connectLimited, DEFAULT_ORDER } from './fx.js';
+import { WAVE_NAMES } from './waves.js';
 
 // Adding a scheme = one file in schemes/ + one entry here. `resolve` (optional)
 // gives the scheme completion cadences, triggered by the ✓/✗ buttons.
@@ -30,38 +31,25 @@ const ROOT_HZ = 220; // A3
 const IDLE_CLEAR_MS = 2500;
 const GLYPH = { U: '↑', D: '↓', L: '←', R: '→' };
 
-// --- URL params: every knob on the page lives in the hash, so any state is a
-// shareable link, e.g. #scheme=heldbreath&fx-delay=1. Query params are folded
-// into the hash once at boot (then dropped from the URL — a lingering query
-// would resurrect state the user has since turned off). The URL write is
-// debounced: Safari throws once history.replaceState exceeds ~100 calls/30 s,
-// which one slider drag would blow through. ---
-const hash = new URLSearchParams(location.hash.slice(1));
-for (const [k, v] of new URLSearchParams(location.search)) {
-  if (!hash.has(k)) hash.set(k, v);
-}
-const getParam = (k) => hash.get(k);
-const getNum = (k) => {
-  const v = parseFloat(getParam(k));
-  return Number.isFinite(v) ? v : null;
-};
-let hashTimer = null;
-function setParam(k, v) {
-  if (v === null || v === undefined) hash.delete(k);
-  else hash.set(k, String(v));
-  clearTimeout(hashTimer);
-  hashTimer = setTimeout(
-    () => history.replaceState(null, '', location.pathname + '#' + hash.toString()),
-    250,
-  );
-}
+const LAYER_SLIDERS = [
+  { key: 'pitch', label: 'pitch (semis ±)', min: -24, max: 24, step: 1, def: 0 },
+  { key: 'detune', label: 'detune (cents ±)', min: -100, max: 100, step: 1, def: 0 },
+  { key: 'vibRate', label: 'vibrato rate (Hz)', min: 0, max: 12, step: 0.1, def: 0 },
+  { key: 'vibDepth', label: 'vibrato depth (¢)', min: 0, max: 100, step: 1, def: 0 },
+  { key: 'decay', label: 'decay ×', min: 0.25, max: 4, step: 0.05, def: 1 },
+  { key: 'bright', label: 'brightness ±', min: -1, max: 1, step: 0.01, def: 0 },
+  { key: 'crush', label: 'crush +', min: 0, max: 1, step: 0.01, def: 0 },
+  { key: 'gain', label: 'gain ×', min: 0, max: 1.5, step: 0.01, def: 1 },
+];
 
-// The game (in-game defaults): heldbreath on hirajoshi.
-const pick = (table, k, def) => (Object.hasOwn(table, k ?? '') ? k : def);
-let schemeKey = pick(SCHEMES, getParam('scheme'), 'heldbreath');
-let scaleKey = pick(SCALES, getParam('scale'), 'hirajoshi');
-let path = [];
-let idleTimer = null;
+const DEV_SLIDERS = [
+  { key: 'pitch', label: 'pitch (semis / A2)', min: 0, max: 36, step: 1, def: 12 },
+  { key: 'detune', label: 'detune (cents)', min: 0, max: 100, step: 1, def: 0 },
+  { key: 'decay', label: 'decay (s)', min: 0.1, max: 3, step: 0.05, def: 1.1 },
+  { key: 'bright', label: 'brightness', min: 0, max: 1, step: 0.01, def: 0.55 },
+  { key: 'crush', label: 'crush', min: 0, max: 1, step: 0.01, def: 0 },
+  { key: 'gain', label: 'gain', min: 0, max: 1, step: 0.01, def: 0.8 },
+];
 
 // --- audio: notes render to buffers via the parity synth, then run through
 // the post-fx racks. Created suspended; first tap resumes (mobile unlock). ---
@@ -69,46 +57,150 @@ let idleTimer = null;
 // ES modules and AudioWorklet this app requires anyway.
 const ctx = new AudioContext();
 
-// Rack order in the hash: <prefix>order=comma,list. Unknown keys drop and
-// missing ones append in default order, so an old URL (no order param) and a
-// URL from a future stage-set both decode to something sensible.
-function decodeOrder(prefix) {
-  const raw = getParam(prefix + 'order');
-  if (!raw) return DEFAULT_ORDER;
-  const seen = raw.split(',').filter((k) => DEFAULT_ORDER.includes(k));
+// Racks are built in default order (reordered below once the config is
+// known); each layer rack feeds the master: source → layer rack → master →
+// limiter.
+const master = buildRack(ctx);
+connectLimited(ctx, master.output);
+const layerRacks = [1, 2, 3].map(() => {
+  const rack = buildRack(ctx);
+  rack.output.connect(master.input);
+  return rack;
+});
+
+// --- config: ONE JSON object is the whole page state (the rl#410
+// interface — schema in the README). The hash carries it URL-encoded;
+// import/export moves the same object as text; values equal to their default
+// are omitted, so a URL/export holds only what changed. ---
+const fromSliders = (defs) => Object.fromEntries(defs.map((s) => [s.key, s.def]));
+function rackDefaults(rack) {
+  const stages = {};
+  for (const st of rack.stages) {
+    stages[st.key] = { on: false, wet: st.wetAmt, ...Object.fromEntries(st.params.map((p) => [p.key, p.def])) };
+  }
+  return { order: [...DEFAULT_ORDER], stages };
+}
+const DEFAULTS = {
+  scheme: 'heldbreath',
+  scale: 'hirajoshi',
+  sidebar: false,
+  devOpen: false,
+  fxOpen: false,
+  dev: fromSliders(DEV_SLIDERS),
+  master: rackDefaults(master),
+  layers: [1, 2, 3].map((n) => ({
+    // Layer 1 defaults to the identity transform, enabled; 2 and 3 start
+    // off, so a bare URL sounds like the plain instrument.
+    on: n === 1,
+    wave: 'sine',
+    ...fromSliders(LAYER_SLIDERS),
+    fx: rackDefaults(layerRacks[n - 1]),
+  })),
+};
+
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// Merge an untrusted partial config over the defaults: unknown keys drop,
+// type mismatches keep the default (a mangled value self-corrects instead of
+// poisoning the page), object-arrays (layers) merge per element.
+function merged(def, over) {
+  if (isObj(def)) {
+    const out = {};
+    for (const k of Object.keys(def)) out[k] = merged(def[k], isObj(over) ? over[k] : undefined);
+    return out;
+  }
+  if (Array.isArray(def)) {
+    if (def.length && isObj(def[0])) return def.map((d, i) => merged(d, Array.isArray(over) ? over[i] : undefined));
+    return Array.isArray(over) ? over : [...def];
+  }
+  return typeof over === typeof def ? over : def;
+}
+
+// The inverse: strip everything equal to its default. Returns undefined when
+// nothing differs.
+function pruned(def, val) {
+  if (isObj(def)) {
+    const out = {};
+    for (const k of Object.keys(def)) {
+      const p = pruned(def[k], val[k]);
+      if (p !== undefined) out[k] = p;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+  if (Array.isArray(def)) {
+    if (def.length && isObj(def[0])) {
+      const arr = def.map((d, i) => pruned(d, val[i]) ?? {});
+      return arr.some((o) => Object.keys(o).length) ? arr : undefined;
+    }
+    return def.join() === val.join() ? undefined : val;
+  }
+  return def === val ? undefined : val;
+}
+
+function parseConfig(text) {
+  try {
+    const v = JSON.parse(text);
+    return isObj(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+const pick = (table, k, def) => (Object.hasOwn(table, k ?? '') ? k : def);
+const clampNum = (v, p) => (Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, v)) : p.def);
+
+// Rack order sanitizer: unknown keys drop and missing ones append, so a
+// config from an older or future stage-set still decodes to something sane.
+function sanitizeOrder(order) {
+  const seen = (Array.isArray(order) ? order : []).filter((k) => DEFAULT_ORDER.includes(k));
   return [...new Set([...seen, ...DEFAULT_ORDER.filter((k) => !seen.includes(k))])];
 }
 
-// Master rack keeps the pre-#2 fx-* hash keys, so already-shared URLs decode
-// unchanged. Each layer rack feeds it: source → layer rack → master → limiter.
-const master = buildRack(ctx, decodeOrder('fx-'));
-connectLimited(ctx, master.output);
+const rawHash = location.hash.slice(1);
+let over = null;
+try {
+  over = parseConfig(decodeURIComponent(rawHash));
+} catch {} // a stray % in a hand-edited hash — fall through to defaults
+if (!over && rawHash) {
+  // Hand-typed gate shorthand — the ONE non-JSON hash form: #dev=1 / #fx=1
+  // (/ #sb=1) opens the panels, nothing else decodes here.
+  const p = new URLSearchParams(rawHash);
+  over = { devOpen: p.get('dev') === '1', fxOpen: p.get('fx') === '1' };
+  if (p.has('sb')) over.sidebar = p.get('sb') !== '0';
+}
+const cfg = merged(DEFAULTS, over ?? {});
+// Absent an explicit `sidebar`, an open panel implies an open sidebar.
+if (!isObj(over) || over.sidebar === undefined) cfg.sidebar = cfg.sidebar || cfg.devOpen || cfg.fxOpen;
+cfg.scheme = pick(SCHEMES, cfg.scheme, DEFAULTS.scheme);
+cfg.scale = pick(SCALES, cfg.scale, DEFAULTS.scale);
+for (const s of DEV_SLIDERS) cfg.dev[s.key] = clampNum(cfg.dev[s.key], s);
+for (const L of cfg.layers) {
+  if (!WAVE_NAMES.includes(L.wave)) L.wave = 'sine';
+  for (const s of LAYER_SLIDERS) L[s.key] = clampNum(L[s.key], s);
+}
 
-// --- 3 synth layers (dpad-audio#2): a layer is a transform on every note
-// played (scheme presses, cadences, dev pluck) — pitch/detune offsets and
-// decay/gain multipliers, NOT absolute values, so a scheme's expressive
-// curve (tension detune/crush) passes through — plus that layer's own rack.
-// Layer 1 defaults to the identity transform, enabled; 2 and 3 start off, so
-// an old URL sounds exactly as it always did.
-const LAYER_SLIDERS = [
-  { key: 'pitch', label: 'pitch (semis ±)', min: -24, max: 24, step: 1, def: 0 },
-  { key: 'detune', label: 'detune (cents ±)', min: -100, max: 100, step: 1, def: 0 },
-  { key: 'decay', label: 'decay ×', min: 0.25, max: 4, step: 0.05, def: 1 },
-  { key: 'bright', label: 'brightness ±', min: -1, max: 1, step: 0.01, def: 0 },
-  { key: 'crush', label: 'crush +', min: 0, max: 1, step: 0.01, def: 0 },
-  { key: 'gain', label: 'gain ×', min: 0, max: 1.5, step: 0.01, def: 1 },
-];
+// The URL write is debounced: Safari throws once history.replaceState
+// exceeds ~100 calls/30 s, which one slider drag would blow through.
+let hashTimer = null;
+function save() {
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(() => {
+    const p = pruned(DEFAULTS, cfg);
+    history.replaceState(null, '', location.pathname + (p ? '#' + encodeURIComponent(JSON.stringify(p)) : ''));
+  }, 250);
+}
 
-const layers = [1, 2, 3].map((n) => {
-  const rack = buildRack(ctx, decodeOrder(`l${n}-fx-`));
-  rack.output.connect(master.input);
-  const vals = {};
-  for (const s of LAYER_SLIDERS) vals[s.key] = getNum(`l${n}-${s.key}`) ?? s.def;
-  const en = getParam(`l${n}`);
-  // Only an explicit 0 disables — a mangled value on layer 1 then fails
-  // toward "sounds like before", not toward silence.
-  return { n, rack, vals, enabled: en === null ? n === 1 : en !== '0' };
-});
+// Apply a config's rack order to the live rack (stages were built in
+// default order).
+function applyOrder(rack, rcfg) {
+  rcfg.order = sanitizeOrder(rcfg.order);
+  rack.stages.sort((a, b) => rcfg.order.indexOf(a.key) - rcfg.order.indexOf(b.key));
+  rack.rewire();
+}
+applyOrder(master, cfg.master);
+cfg.layers.forEach((L, i) => applyOrder(layerRacks[i], L.fx));
+
+const layers = cfg.layers.map((vals, i) => ({ n: i + 1, rack: layerRacks[i], vals }));
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 function layerNote(s, vals) {
@@ -120,6 +212,9 @@ function layerNote(s, vals) {
     brightness: clamp01(s.brightness + vals.bright),
     crush: clamp01(s.crush + vals.crush),
     gain: s.gain * vals.gain,
+    wave: s.wave ?? vals.wave,
+    vibRateHz: (s.vibRateHz ?? 0) + vals.vibRate,
+    vibDepthCents: (s.vibDepthCents ?? 0) + vals.vibDepth,
   };
 }
 
@@ -137,7 +232,7 @@ function playPhrase(specs) {
   const scaled = specs.map((s) => ({ ...s, gain: s.gain * atten }));
   let sounding = 0;
   for (const L of layers) {
-    if (!L.enabled) continue;
+    if (!L.vals.on) continue;
     const rendered = renderPhrase(
       scaled.map((s) => layerNote(s, L.vals)),
       ctx.sampleRate,
@@ -167,14 +262,17 @@ function comboState() {
     path: [...path],
     depth: path.length,
     unlocks: new Set(), // playground: everything unlocked; here for scheme parity
-    scale: SCALES[scaleKey].semis,
+    scale: SCALES[cfg.scale].semis,
     rootHz: ROOT_HZ,
   };
 }
 
+let path = [];
+let idleTimer = null;
+
 function press(dir) {
   ensureAudio();
-  playPhrase([SCHEMES[schemeKey].fn(comboState(), dir)]);
+  playPhrase([SCHEMES[cfg.scheme].fn(comboState(), dir)]);
   path.push(dir);
   renderPath();
   clearTimeout(idleTimer);
@@ -187,7 +285,7 @@ function press(dir) {
 // Completion cadence: accept = the code registered (exhale), reject = unknown
 // code (deceptive cadence). Ends the phrase either way.
 function cadence(accepted) {
-  const resolve = SCHEMES[schemeKey].resolve;
+  const resolve = SCHEMES[cfg.scheme].resolve;
   if (!resolve || path.length === 0) return;
   ensureAudio();
   playPhrase(resolve(comboState(), accepted));
@@ -225,22 +323,20 @@ function fillPicker(id, entries, current, onChange) {
 }
 
 function updateCadenceButtons() {
-  document.getElementById('cadence').hidden = !SCHEMES[schemeKey].resolve;
+  document.getElementById('cadence').hidden = !SCHEMES[cfg.scheme].resolve;
 }
 
-fillPicker('scheme-picker', SCHEMES, schemeKey, (v) => {
-  schemeKey = v;
+fillPicker('scheme-picker', SCHEMES, cfg.scheme, (v) => {
+  cfg.scheme = v;
   clearPath();
-  setParam('scheme', v);
+  save();
   updateCadenceButtons();
 });
-fillPicker('scale-picker', SCALES, scaleKey, (v) => {
-  scaleKey = v;
+fillPicker('scale-picker', SCALES, cfg.scale, (v) => {
+  cfg.scale = v;
   clearPath();
-  setParam('scale', v);
+  save();
 });
-setParam('scheme', schemeKey);
-setParam('scale', scaleKey);
 updateCadenceButtons();
 
 // pointerdown, not click, for press latency — but pointerdown's preventDefault
@@ -266,7 +362,7 @@ onActivate(document.getElementById('reject'), () => cadence(false));
 const KEYMAP = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R' };
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
-  // A focused slider/select/summary owns its keys (arrow-nudge, Enter-toggle).
+  // A focused slider/select/textarea/summary owns its keys.
   if (e.target.closest?.('input, select, textarea, button, summary')) return;
   if (KEYMAP[e.key]) {
     e.preventDefault();
@@ -331,20 +427,15 @@ function selectRow(p, value, onInput) {
 
 function wirePanel(id, key) {
   const el = document.getElementById(id);
-  el.open = getParam(key) === '1';
-  el.addEventListener('toggle', () => setParam(key, el.open ? '1' : null));
+  el.open = cfg[key];
+  el.addEventListener('toggle', () => {
+    cfg[key] = el.open;
+    save();
+  });
 }
 
 // --- dev mode: the full synth surface on sliders, no code entry needed ---
-const DEV_SLIDERS = [
-  { key: 'pitch', label: 'pitch (semis / A2)', min: 0, max: 36, step: 1, def: 12 },
-  { key: 'detune', label: 'detune (cents)', min: 0, max: 100, step: 1, def: 0 },
-  { key: 'decay', label: 'decay (s)', min: 0.1, max: 3, step: 0.05, def: 1.1 },
-  { key: 'bright', label: 'brightness', min: 0, max: 1, step: 0.01, def: 0.55 },
-  { key: 'crush', label: 'crush', min: 0, max: 1, step: 0.01, def: 0 },
-  { key: 'gain', label: 'gain', min: 0, max: 1, step: 0.01, def: 0.8 },
-];
-const devVals = {};
+const devVals = cfg.dev;
 
 function devSpec() {
   return {
@@ -372,14 +463,13 @@ function auditionLayer(L) {
 }
 
 {
-  wirePanel('dev-panel', 'dev');
+  wirePanel('dev-panel', 'devOpen');
   const root = document.getElementById('dev-controls');
   for (const s of DEV_SLIDERS) {
-    devVals[s.key] = getNum('dev-' + s.key) ?? s.def;
     root.appendChild(
       sliderRow(s, devVals[s.key], (v) => {
         devVals[s.key] = v;
-        setParam('dev-' + s.key, v === s.def ? null : v);
+        save();
       }, devPluck),
     );
   }
@@ -387,8 +477,8 @@ function auditionLayer(L) {
 }
 
 // --- rack UI: one fieldset per stage, ▲▼ to reorder (audio graph + DOM +
-// <prefix>order hash param move together) ---
-function buildRackUI(rack, prefix, root) {
+// the config's order list move together) ---
+function buildRackUI(rack, rcfg, root) {
   const boxes = new Map(); // stage → its fieldset
   const arrows = new Map(); // stage → { up, down }
   const updateArrows = () => {
@@ -421,22 +511,25 @@ function buildRackUI(rack, prefix, root) {
         (focused === a.up ? a.down : a.up).focus();
       }
     }
-    const order = rack.stages.map((s) => s.key).join(',');
-    setParam(prefix + 'order', order === DEFAULT_ORDER.join(',') ? null : order);
+    rcfg.order = rack.stages.map((s) => s.key);
+    save();
   };
   for (const st of rack.stages) {
+    const sc = rcfg.stages[st.key];
     const box = document.createElement('fieldset');
     box.className = 'fx-stage';
     box.dataset.key = st.key;
     const legend = document.createElement('legend');
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
-    toggle.checked = getParam(`${prefix}${st.key}`) === '1';
+    toggle.checked = sc.on === true;
+    sc.on = toggle.checked;
     toggle.setAttribute('aria-label', `${st.label} on`);
     st.setEnabled(toggle.checked);
     toggle.addEventListener('change', () => {
       st.setEnabled(toggle.checked);
-      setParam(`${prefix}${st.key}`, toggle.checked ? '1' : null);
+      sc.on = toggle.checked;
+      save();
     });
     const name = document.createElement('span');
     name.textContent = st.label;
@@ -455,40 +548,40 @@ function buildRackUI(rack, prefix, root) {
     arrows.set(st, { up, down });
     legend.append(toggle, name, up, down);
     box.appendChild(legend);
-    // Values at their default are DELETED from the hash, not written — the
-    // shared URL carries only what was actually changed (rl#410 decodes it).
     const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01, def: st.wetAmt };
-    const wet0 = getNum(`${prefix}${st.key}-wet`) ?? st.wetAmt;
-    st.setWet(wet0);
+    sc.wet = clampNum(sc.wet, wetP);
+    st.setWet(sc.wet);
     box.appendChild(
-      sliderRow(wetP, wet0, (v) => {
+      sliderRow(wetP, sc.wet, (v) => {
         st.setWet(v);
-        setParam(`${prefix}${st.key}-wet`, v === wetP.def ? null : v);
+        sc.wet = v;
+        save();
       }),
     );
     for (const p of st.params) {
-      const k = `${prefix}${st.key}-${p.key}`;
       if (p.kind === 'select') {
-        const v0 = p.options.includes(getParam(k)) ? getParam(k) : p.def;
-        if (v0 !== p.def) p.set(v0);
-        box.appendChild(selectRow(p, v0, (v) => {
+        if (!p.options.includes(sc[p.key])) sc[p.key] = p.def;
+        if (sc[p.key] !== p.def) p.set(sc[p.key]);
+        box.appendChild(selectRow(p, sc[p.key], (v) => {
           p.set(v);
-          setParam(k, v === p.def ? null : v);
+          sc[p.key] = v;
+          save();
         }));
       } else {
-        const v0 = getNum(k) ?? p.def;
-        if (v0 !== p.def) p.set(v0);
+        sc[p.key] = clampNum(sc[p.key], p);
+        if (sc[p.key] !== p.def) p.set(sc[p.key]);
         // Lazy params (expensive sets, e.g. reverb IR rebuild) apply on
         // release; everything else tracks the drag.
-        let pending = v0;
+        let pending = sc[p.key];
         box.appendChild(
           sliderRow(
             p,
-            v0,
+            sc[p.key],
             (v) => {
               pending = v;
               if (!p.lazy) p.set(v);
-              setParam(k, v === p.def ? null : v);
+              sc[p.key] = v;
+              save();
             },
             p.lazy ? () => p.set(pending) : null,
           ),
@@ -503,11 +596,12 @@ function buildRackUI(rack, prefix, root) {
 
 // --- master post-fx panel ---
 {
-  wirePanel('fx-panel', 'fx');
-  buildRackUI(master, 'fx-', document.getElementById('fx-controls'));
+  wirePanel('fx-panel', 'fxOpen');
+  buildRackUI(master, cfg.master, document.getElementById('fx-controls'));
 }
 
-// --- layer panels: enable toggle in the summary, param sliders, own rack ---
+// --- layer panels: enable toggle in the summary, wave picker, param
+// sliders, own rack ---
 {
   const root = document.getElementById('layers');
   for (const L of layers) {
@@ -516,22 +610,29 @@ function buildRackUI(rack, prefix, root) {
     const sum = document.createElement('summary');
     const en = document.createElement('input');
     en.type = 'checkbox';
-    en.checked = L.enabled;
+    en.checked = L.vals.on;
     en.setAttribute('aria-label', `layer ${L.n} on`);
     // The checkbox lives in the summary; without this its click also
     // toggles the <details>.
     en.addEventListener('click', (e) => e.stopPropagation());
     en.addEventListener('change', () => {
-      L.enabled = en.checked;
-      setParam(`l${L.n}`, L.enabled === (L.n === 1) ? null : L.enabled ? '1' : '0');
+      L.vals.on = en.checked;
+      save();
     });
     sum.append(en, ` layer ${L.n}`);
     det.appendChild(sum);
+    det.appendChild(
+      selectRow({ label: 'wave', options: WAVE_NAMES }, L.vals.wave, (v) => {
+        L.vals.wave = v;
+        save();
+        auditionLayer(L);
+      }),
+    );
     for (const s of LAYER_SLIDERS) {
       det.appendChild(
         sliderRow(s, L.vals[s.key], (v) => {
           L.vals[s.key] = v;
-          setParam(`l${L.n}-${s.key}`, v === s.def ? null : v);
+          save();
         }, () => auditionLayer(L)),
       );
     }
@@ -540,36 +641,54 @@ function buildRackUI(rack, prefix, root) {
     fxSum.textContent = `layer ${L.n} fx`;
     const fxRoot = document.createElement('div');
     fxDet.append(fxSum, fxRoot);
-    buildRackUI(L.rack, `l${L.n}-fx-`, fxRoot);
+    buildRackUI(L.rack, L.vals.fx, fxRoot);
     det.appendChild(fxDet);
     root.appendChild(det);
   }
 }
 
-// --- sidebar: collapsible, independently scrolling, hosts every panel.
-// Absent `sb`, it opens when a panel gate (#dev=1 / #fx=1) is present, so an
-// old shared URL still shows what it always showed. ---
+// --- config panel: import/export of the SAME object the hash carries ---
+{
+  const text = document.getElementById('cfg-text');
+  const msg = document.getElementById('cfg-msg');
+  onActivate(document.getElementById('cfg-export'), () => {
+    text.value = JSON.stringify(pruned(DEFAULTS, cfg) ?? {}, null, 2);
+    msg.textContent = 'exported (defaults omitted)';
+    navigator.clipboard?.writeText(text.value).then(
+      () => (msg.textContent = 'exported + copied'),
+      () => {},
+    );
+  });
+  onActivate(document.getElementById('cfg-import'), () => {
+    const v = parseConfig(text.value);
+    if (!v) {
+      msg.textContent = 'not a JSON object';
+      return;
+    }
+    // Import REPLACES the whole config (missing fields = defaults). The
+    // hash is the one decode path, so apply by writing it and reloading.
+    const p = pruned(DEFAULTS, merged(DEFAULTS, v));
+    location.hash = p ? encodeURIComponent(JSON.stringify(p)) : '';
+    location.reload();
+  });
+}
+
+// --- sidebar: collapsible, independently scrolling, hosts every panel ---
 {
   const btn = document.getElementById('sidebar-toggle');
   const aside = document.getElementById('sidebar');
   const setOpen = (open) => {
     document.body.classList.toggle('sb-open', open);
     // Closed = offscreen but still in the DOM; inert keeps Tab and screen
-    // readers from wandering into ~90 invisible controls.
+    // readers from wandering into ~100 invisible controls.
     aside.inert = !open;
     btn.textContent = open ? '✕' : '🎛';
     btn.setAttribute('aria-expanded', String(open));
   };
-  const sb = getParam('sb');
-  const open = sb === null ? getParam('dev') === '1' || getParam('fx') === '1' : sb !== '0';
-  setOpen(open);
-  // Pin the inferred state into the hash: without this, an old #fx=1 URL
-  // whose fx panel is later closed (deleting `fx`) would reload with the
-  // sidebar shut while it is open on screen.
-  if (open && sb === null) setParam('sb', '1');
+  setOpen(cfg.sidebar);
   onActivate(btn, () => {
-    const on = !document.body.classList.contains('sb-open');
-    setOpen(on);
-    setParam('sb', on ? '1' : '0');
+    cfg.sidebar = !document.body.classList.contains('sb-open');
+    setOpen(cfg.sidebar);
+    save();
   });
 }

@@ -5,8 +5,11 @@
 // a neutral one. A limiter sits before the destination so no combination of
 // maxed settings (delay feedback + big reverb + crush) can get painful.
 //
-// Default chain order: crush → filter → chorus → phaser → delay → reverb —
-// reorderable per rack (dpad-audio#2); the order serializes as <prefix>order.
+// Default chain order: crush → filter → chorus → phaser → ringmod → distort
+// → delay → reverb → comp — reorderable per rack (dpad-audio#2); the order
+// serializes in the rack's `order` list.
+
+import { WAVE_NAMES, makePeriodicWave } from './waves.js';
 
 // `lazy: true` = apply on slider release, not per-pixel (for expensive sets).
 // Param key 'wet' is reserved (the stage's wet slider claims <prefix><key>-wet)
@@ -188,13 +191,78 @@ function reverbStage(ctx) {
   return st;
 }
 
+// Ring modulation: the input times an oscillator running the SAME wave set
+// the layers select from (dpad-audio#3) — one wave implementation, two
+// projections (waves.js tables → sampler for the synth, PeriodicWave here).
+function ringmodStage(ctx) {
+  const st = makeStage(ctx, 'ringmod', 'ring mod', 0.7);
+  const mod = ctx.createGain();
+  mod.gain.value = 0; // the oscillator IS the gain: out = in × osc
+  const osc = ctx.createOscillator();
+  osc.setPeriodicWave(makePeriodicWave(ctx, 'sine'));
+  osc.frequency.value = 220;
+  osc.start();
+  osc.connect(mod.gain);
+  st.input.connect(mod).connect(st.wet);
+  st.params = [
+    selectParam('wave', 'wave', WAVE_NAMES, 'sine', (v) => osc.setPeriodicWave(makePeriodicWave(ctx, v))),
+    param('freq', 'freq (Hz)', 1, 2000, 1, 220, (v) => osc.frequency.setTargetAtTime(v, ctx.currentTime, 0.02), { log: true }),
+  ];
+  return st;
+}
+
+function distortStage(ctx) {
+  const st = makeStage(ctx, 'distort', 'distortion', 0.6);
+  const shaper = ctx.createWaveShaper();
+  shaper.oversample = '4x';
+  const post = ctx.createGain();
+  const apply = (drive) => {
+    const n = 1024;
+    const c = new Float32Array(n);
+    const k = 1 + drive * 60;
+    // tanh(kx)/tanh(k): unity endpoints at any drive, so the slider moves
+    // saturation, not level; post trim offsets the loudness the curve adds.
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      c[i] = Math.tanh(k * x) / Math.tanh(k);
+    }
+    shaper.curve = c;
+    post.gain.value = 1 / (1 + drive);
+  };
+  apply(0.35);
+  st.input.connect(shaper).connect(post).connect(st.wet);
+  st.params = [param('drive', 'drive', 0, 1, 0.01, 0.35, apply)];
+  return st;
+}
+
+function compStage(ctx) {
+  const st = makeStage(ctx, 'comp', 'compressor', 1);
+  const c = ctx.createDynamicsCompressor();
+  c.threshold.value = -24;
+  c.knee.value = 12;
+  c.ratio.value = 4;
+  c.attack.value = 0.01;
+  c.release.value = 0.2;
+  st.input.connect(c).connect(st.wet);
+  st.params = [
+    param('thresh', 'threshold (dB)', -60, 0, 1, -24, (v) => (c.threshold.value = v)),
+    param('ratio', 'ratio', 1, 20, 0.5, 4, (v) => (c.ratio.value = v)),
+    param('attack', 'attack (s)', 0.001, 0.3, 0.001, 0.01, (v) => (c.attack.value = v)),
+    param('release', 'release (s)', 0.05, 1, 0.01, 0.2, (v) => (c.release.value = v)),
+  ];
+  return st;
+}
+
 const STAGE_MAKERS = {
   crush: crushStage,
   filter: filterStage,
   chorus: chorusStage,
   phaser: phaserStage,
+  ringmod: ringmodStage,
+  distort: distortStage,
   delay: delayStage,
   reverb: reverbStage,
+  comp: compStage,
 };
 export const DEFAULT_ORDER = Object.keys(STAGE_MAKERS);
 
