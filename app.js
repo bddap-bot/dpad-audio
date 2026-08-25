@@ -92,7 +92,7 @@ connectLimited(ctx, master.output);
 // an old URL sounds exactly as it always did.
 const LAYER_SLIDERS = [
   { key: 'pitch', label: 'pitch (semis ±)', min: -24, max: 24, step: 1, def: 0 },
-  { key: 'detune', label: 'detune (cents +)', min: 0, max: 100, step: 1, def: 0 },
+  { key: 'detune', label: 'detune (cents ±)', min: -100, max: 100, step: 1, def: 0 },
   { key: 'decay', label: 'decay ×', min: 0.25, max: 4, step: 0.05, def: 1 },
   { key: 'bright', label: 'brightness ±', min: -1, max: 1, step: 0.01, def: 0 },
   { key: 'crush', label: 'crush +', min: 0, max: 1, step: 0.01, def: 0 },
@@ -105,7 +105,9 @@ const layers = [1, 2, 3].map((n) => {
   const vals = {};
   for (const s of LAYER_SLIDERS) vals[s.key] = getNum(`l${n}-${s.key}`) ?? s.def;
   const en = getParam(`l${n}`);
-  return { n, rack, vals, enabled: en === null ? n === 1 : en === '1' };
+  // Only an explicit 0 disables — a mangled value on layer 1 then fails
+  // toward "sounds like before", not toward silence.
+  return { n, rack, vals, enabled: en === null ? n === 1 : en !== '0' };
 });
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -141,18 +143,22 @@ function playPhrase(specs) {
       ctx.sampleRate,
     );
     if (rendered.length === 0) continue;
-    const buf = ctx.createBuffer(1, rendered.length, ctx.sampleRate);
-    buf.copyToChannel(rendered, 0);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(L.rack.input);
     sounding++;
-    src.onended = () => {
+    playRendered(rendered, L.rack.input, () => {
       if (--sounding === 0) livePhrases--;
-    };
-    src.start();
+    });
   }
   if (sounding > 0) livePhrases++;
+}
+
+function playRendered(rendered, dest, onended) {
+  const buf = ctx.createBuffer(1, rendered.length, ctx.sampleRate);
+  buf.copyToChannel(rendered, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(dest);
+  if (onended) src.onended = onended;
+  src.start();
 }
 
 // --- combo state + press handling ---
@@ -337,19 +343,29 @@ const DEV_SLIDERS = [
 ];
 const devVals = {};
 
+function devSpec() {
+  return {
+    onsetS: 0,
+    freqHz: (ROOT_HZ / 2) * Math.pow(2, devVals.pitch / 12), // A2, the heldbreath register
+    detuneCents: devVals.detune,
+    tauS: devVals.decay / 7,
+    brightness: devVals.bright,
+    crush: devVals.crush,
+    gain: devVals.gain,
+  };
+}
+
 function devPluck() {
   ensureAudio();
-  playPhrase([
-    {
-      onsetS: 0,
-      freqHz: (ROOT_HZ / 2) * Math.pow(2, devVals.pitch / 12), // A2, the heldbreath register
-      detuneCents: devVals.detune,
-      tauS: devVals.decay / 7,
-      brightness: devVals.bright,
-      crush: devVals.crush,
-      gain: devVals.gain,
-    },
-  ]);
+  playPhrase([devSpec()]);
+}
+
+// Audition one layer in isolation, enabled or not — a slider on a disabled
+// layer must still make a sound, or it's a silent knob while tuning.
+function auditionLayer(L) {
+  ensureAudio();
+  const rendered = renderPhrase([layerNote(devSpec(), L.vals)], ctx.sampleRate);
+  if (rendered.length > 0) playRendered(rendered, L.rack.input);
 }
 
 {
@@ -360,7 +376,7 @@ function devPluck() {
     root.appendChild(
       sliderRow(s, devVals[s.key], (v) => {
         devVals[s.key] = v;
-        setParam('dev-' + s.key, v);
+        setParam('dev-' + s.key, v === s.def ? null : v);
       }, devPluck),
     );
   }
@@ -372,9 +388,8 @@ function devPluck() {
 function buildRackUI(rack, prefix, root) {
   const boxes = new Map(); // stage → its fieldset
   const arrows = new Map(); // stage → { up, down }
-  const renderOrder = () => {
+  const updateArrows = () => {
     rack.stages.forEach((st, i) => {
-      root.appendChild(boxes.get(st)); // appendChild moves — reorders in place
       arrows.get(st).up.disabled = i === 0;
       arrows.get(st).down.disabled = i === rack.stages.length - 1;
     });
@@ -385,7 +400,24 @@ function buildRackUI(rack, prefix, root) {
     if (j < 0 || j >= rack.stages.length) return;
     [rack.stages[i], rack.stages[j]] = [rack.stages[j], rack.stages[i]];
     rack.rewire();
-    renderOrder();
+    // Move ONLY the pressed stage's box — re-appending every box would yank
+    // the node under any in-flight slider drag elsewhere in the rack.
+    const box = boxes.get(st);
+    const other = boxes.get(rack.stages[i]); // the displaced neighbor, now at i
+    const focused = document.activeElement;
+    if (delta < 0) root.insertBefore(box, other);
+    else root.insertBefore(other, box);
+    updateArrows();
+    // insertBefore is remove+reinsert, which drops focus to <body> — where
+    // the next arrow key would play a note instead of moving again.
+    if (focused instanceof HTMLElement && document.activeElement !== focused) {
+      focused.focus();
+      if (document.activeElement !== focused) {
+        // The pressed arrow just got disabled at the rack's edge.
+        const a = arrows.get(st);
+        (focused === a.up ? a.down : a.up).focus();
+      }
+    }
     const order = rack.stages.map((s) => s.key).join(',');
     setParam(prefix + 'order', order === DEFAULT_ORDER.join(',') ? null : order);
   };
@@ -397,6 +429,7 @@ function buildRackUI(rack, prefix, root) {
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
     toggle.checked = getParam(`${prefix}${st.key}`) === '1';
+    toggle.setAttribute('aria-label', `${st.label} on`);
     st.setEnabled(toggle.checked);
     toggle.addEventListener('change', () => {
       st.setEnabled(toggle.checked);
@@ -419,13 +452,15 @@ function buildRackUI(rack, prefix, root) {
     arrows.set(st, { up, down });
     legend.append(toggle, name, up, down);
     box.appendChild(legend);
-    const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01 };
+    // Values at their default are DELETED from the hash, not written — the
+    // shared URL carries only what was actually changed (rl#410 decodes it).
+    const wetP = { key: 'wet', label: 'wet', min: 0, max: 1, step: 0.01, def: st.wetAmt };
     const wet0 = getNum(`${prefix}${st.key}-wet`) ?? st.wetAmt;
     st.setWet(wet0);
     box.appendChild(
       sliderRow(wetP, wet0, (v) => {
         st.setWet(v);
-        setParam(`${prefix}${st.key}-wet`, v);
+        setParam(`${prefix}${st.key}-wet`, v === wetP.def ? null : v);
       }),
     );
     for (const p of st.params) {
@@ -435,7 +470,7 @@ function buildRackUI(rack, prefix, root) {
         if (v0 !== p.def) p.set(v0);
         box.appendChild(selectRow(p, v0, (v) => {
           p.set(v);
-          setParam(k, v);
+          setParam(k, v === p.def ? null : v);
         }));
       } else {
         const v0 = getNum(k) ?? p.def;
@@ -450,7 +485,7 @@ function buildRackUI(rack, prefix, root) {
             (v) => {
               pending = v;
               if (!p.lazy) p.set(v);
-              setParam(k, v);
+              setParam(k, v === p.def ? null : v);
             },
             p.lazy ? () => p.set(pending) : null,
           ),
@@ -458,8 +493,9 @@ function buildRackUI(rack, prefix, root) {
       }
     }
     boxes.set(st, box);
+    root.appendChild(box);
   }
-  renderOrder();
+  updateArrows();
 }
 
 // --- master post-fx panel ---
@@ -493,7 +529,7 @@ function buildRackUI(rack, prefix, root) {
         sliderRow(s, L.vals[s.key], (v) => {
           L.vals[s.key] = v;
           setParam(`l${L.n}-${s.key}`, v === s.def ? null : v);
-        }, devPluck),
+        }, () => auditionLayer(L)),
       );
     }
     const fxDet = document.createElement('details');
@@ -512,16 +548,25 @@ function buildRackUI(rack, prefix, root) {
 // old shared URL still shows what it always showed. ---
 {
   const btn = document.getElementById('sidebar-toggle');
+  const aside = document.getElementById('sidebar');
   const setOpen = (open) => {
     document.body.classList.toggle('sb-open', open);
+    // Closed = offscreen but still in the DOM; inert keeps Tab and screen
+    // readers from wandering into ~90 invisible controls.
+    aside.inert = !open;
     btn.textContent = open ? '✕' : '🎛';
     btn.setAttribute('aria-expanded', String(open));
   };
   const sb = getParam('sb');
-  setOpen(sb === null ? getParam('dev') === '1' || getParam('fx') === '1' : sb === '1');
+  const open = sb === null ? getParam('dev') === '1' || getParam('fx') === '1' : sb !== '0';
+  setOpen(open);
+  // Pin the inferred state into the hash: without this, an old #fx=1 URL
+  // whose fx panel is later closed (deleting `fx`) would reload with the
+  // sidebar shut while it is open on screen.
+  if (open && sb === null) setParam('sb', '1');
   onActivate(btn, () => {
-    const open = !document.body.classList.contains('sb-open');
-    setOpen(open);
-    setParam('sb', open ? '1' : '0');
+    const on = !document.body.classList.contains('sb-open');
+    setOpen(on);
+    setParam('sb', on ? '1' : '0');
   });
 }

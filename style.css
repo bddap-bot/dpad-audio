@@ -25,6 +25,8 @@ main {
 header {
   width: 100%;
   max-width: 30rem;
+  /* Keep the pickers out from under the fixed sidebar toggle. */
+  padding-right: 2.8rem;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -126,7 +128,7 @@ select {
 #sidebar-toggle {
   position: fixed;
   top: max(0.75rem, env(safe-area-inset-top));
-  right: 0.75rem;
+  right: max(0.75rem, env(safe-area-inset-right));
   z-index: 6;
   border: none;
   border-radius: 0.8rem;
@@ -153,8 +155,8 @@ select {
   overscroll-behavior: contain;
   background: #0e0e1a;
   border-left: 1px solid #2c2c4a;
-  padding: calc(max(0.75rem, env(safe-area-inset-top)) + 2.6rem) 0.75rem
-    max(0.75rem, env(safe-area-inset-bottom));
+  padding: calc(max(0.75rem, env(safe-area-inset-top)) + 2.6rem)
+    max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) 0.75rem;
   transform: translateX(100%);
   transition: transform 0.2s ease;
 }

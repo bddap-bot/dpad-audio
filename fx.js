@@ -9,7 +9,8 @@
 // reorderable per rack (dpad-audio#2); the order serializes as <prefix>order.
 
 // `lazy: true` = apply on slider release, not per-pixel (for expensive sets).
-// Param key 'wet' is reserved — the stage's wet slider claims fx-<key>-wet.
+// Param key 'wet' is reserved (the stage's wet slider claims <prefix><key>-wet)
+// and so is stage key 'order' (<prefix>order carries the rack order).
 function param(key, label, min, max, step, def, set, opts = {}) {
   return { key, label, min, max, step, def, set, ...opts };
 }

@@ -17,6 +17,9 @@ dom=$(chromium --headless=new --disable-gpu --no-sandbox \
   --virtual-time-budget=30000 \
   --dump-dom "http://127.0.0.1:$port/dom-test.html" 2>/dev/null)
 
-echo "$dom" | grep -oE 'DOM-TEST: (PASS|FAIL)' | head -1
+# Match the verdict only where the harness renders it (the <pre>), never the
+# harness's own inline script source, which --dump-dom also serializes.
+verdict=$(echo "$dom" | grep -oE '<pre id="out">DOM-TEST: (PASS|FAIL)' | head -1 | sed 's/.*>//')
+echo "${verdict:-DOM-TEST: NO-VERDICT (harness never rendered)}"
 echo "$dom" | grep -E '^FAIL: ' || true
-echo "$dom" | grep -q 'DOM-TEST: PASS'
+[ "$verdict" = "DOM-TEST: PASS" ]
