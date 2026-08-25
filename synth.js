@@ -24,11 +24,12 @@ export function crushParams(amt) {
   };
 }
 
-// A NoteSpec mirrors the game's: { onsetS, freqHz, detuneCents, tauS,
-// brightness 0..1, crush 0..1, gain }. tauS is the amplitude time constant;
-// the note rings ~7τ (the page-facing "decay to silence" is 7× this).
+// A NoteSpec mirrors the game's: { onsetS (optional, default 0), freqHz,
+// detuneCents, tauS, brightness 0..1, crush 0..1, gain }. tauS is the
+// amplitude time constant; the note rings ~7τ (the page-facing "decay to
+// silence" is 7× this).
 function makeVoice(spec, sr) {
-  const start = Math.floor(spec.onsetS * sr);
+  const start = Math.floor((spec.onsetS ?? 0) * sr);
   const spread = Math.pow(2, spec.detuneCents / 2400); // voices sit ± half apart
   const brightness = clamp01(spec.brightness);
   const crushAmt = clamp01(spec.crush);

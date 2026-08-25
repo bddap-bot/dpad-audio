@@ -5,8 +5,9 @@
 //     path:   presses so far, NOT including this one, e.g. ['U','R']
 //     scale:  semitone offsets from the root, e.g. [0,3,5,7,10]
 //   press: 'U' | 'D' | 'L' | 'R'
-//   NoteSpec: { freqHz, detuneCents, tauS, brightness, crush, gain } —
-//     tauS is the decay time constant; a note rings ~7τ.
+//   NoteSpec: { freqHz, detuneCents, tauS, brightness, crush, gain, onsetS? }
+//     tauS is the decay time constant; a note rings ~7τ. onsetS (seconds into
+//     the phrase, default 0) only matters for multi-note resolve phrases.
 //
 // Here each direction moves a number of SCALE DEGREES relative to where the
 // melody already is, so the same press sounds different depending on the path

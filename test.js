@@ -61,7 +61,9 @@ assert.ok(!HIRAJOSHI.includes(((Math.round(badSemis) % 12) + 12) % 12), 'lands O
 
 // The synth terminates, stays clamped with headroom, and actually sounds.
 const deep = heldbreath(state(Array(12).fill('D')), 'U');
-const notes = [{ onsetS: 0, ...deep }, ...resolve(state(['U']), true)];
+// deep rendered AS RETURNED by the scheme (no onsetS injected) — a press
+// event must sound without the caller patching it up.
+const notes = [deep, ...resolve(state(['U']), true)];
 const samples = renderPhrase(notes, 44100);
 assert.ok(samples.length > 0 && samples.length < 10 * 44100, 'runaway tail');
 let peak = 0;
@@ -71,5 +73,17 @@ assert.ok(peak > 0.05, `inaudible phrase: ${peak}`);
 let tail = 0;
 for (const s of samples.slice(-100)) tail = Math.max(tail, Math.abs(s));
 assert.ok(tail < 0.01, `tail still hot at cutoff: ${tail}`);
+
+// Every scheme's press event, rendered AS RETURNED, actually sounds — guards
+// the NoteSpec contract between schemes/ and synth.js (a missing field NaNs
+// the render into silence, not an error).
+for (const name of ['relative', 'drift', 'fixed', 'heldbreath', 'patchwalk', 'harmonic-field']) {
+  const m = await import(`./schemes/${name}.js`);
+  const ev = m.default(state(['U']), 'D');
+  const r = renderPhrase([ev], 44100);
+  let p = 0;
+  for (const s of r) p = Math.max(p, Math.abs(s));
+  assert.ok(r.length > 0 && p > 0.02, `${name} press is silent: len=${r.length} peak=${p}`);
+}
 
 console.log('parity tests pass');
