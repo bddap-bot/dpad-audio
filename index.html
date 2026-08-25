@@ -31,7 +31,23 @@
     <button id="clear" aria-label="clear path">✕</button>
   </div>
 
-  <footer>arrow keys work too · path auto-clears after a pause</footer>
+  <div id="cadence" hidden>
+    <button id="accept" aria-label="accept cadence">✓ accept</button>
+    <button id="reject" aria-label="reject cadence">✗ reject</button>
+  </div>
+
+  <details id="dev-panel">
+    <summary>dev mode — free play</summary>
+    <div id="dev-controls"></div>
+    <button id="pluck">pluck</button>
+  </details>
+
+  <details id="fx-panel">
+    <summary>post-fx — pick by ear</summary>
+    <div id="fx-controls"></div>
+  </details>
+
+  <footer>arrow keys work too · enter ✓ / backspace ✗ · path auto-clears after a pause</footer>
 </main>
 <script type="module" src="app.js"></script>
 </body>
