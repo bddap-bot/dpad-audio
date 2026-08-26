@@ -942,6 +942,10 @@ function buildRackUI(rack, rcfg, root, prefix) {
   });
 }
 
+// dom-test.html's effect assertions read the applied values and spy on the
+// tick's writeback, both of which live only in these closures — the ONE test hook.
+window.__modProbe = { cfg, mval, lastSet, FX_BIND, layerNote, devSpec, layers };
+
 // --- sidebar: collapsible, independently scrolling, hosts every panel ---
 {
   const btn = document.getElementById('sidebar-toggle');

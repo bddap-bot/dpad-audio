@@ -182,7 +182,97 @@ try {
   const s2 = readState(f2.contentWindow);
   if (JSON.stringify(s1) !== JSON.stringify(s2))
     fail('round-trip mismatch:\nA=' + JSON.stringify(s1) + '\nB=' + JSON.stringify(s2));
+  // The FX tick runs on the reloaded instance too (mapping from an app-written hash).
+  // Spying on the writeback (b.set), not the computed cache: an evaluation
+  // that computes but never writes is exactly the failure being guarded.
+  const p2 = f2.contentWindow.__modProbe;
+  const b2 = p2 && p2.FX_BIND.get('master.delay.time');
+  const rec2 = [];
+  if (b2) {
+    const orig = b2.set;
+    b2.set = (v) => { rec2.push(v); orig(v); };
+    p2.cfg.sliders[0].value = 0.6; // source move → writeback at ≈1.28
+    await wait(120);
+  }
+  if (!rec2.length || Math.abs(rec2[rec2.length - 1] - 1.28) > 0.02)
+    fail('post-reload fx tick inert: ' + (rec2[rec2.length - 1] ?? 'no writeback') + ', want ≈1.28');
   f2.remove();
+
+  // Mod mappings must have an EFFECT (dpad-audio#5), not just round-trip:
+  // a mapped param's applied value tracks its source — live via the FX tick,
+  // and at note trigger for layer params. This is the assertion whose absence
+  // let the inert-mappings bug ship green. Runs after the round-trip: it
+  // mutates live config/slider state, which must not pollute s1 vs s2.
+  const probe = w1.__modProbe;
+  if (!probe) {
+    fail('__modProbe missing');
+  } else {
+    // Spy on the tick's writeback for the paths under test.
+    const spy = (path) => {
+      const b = probe.FX_BIND.get(path);
+      const rec = [];
+      const orig = b.set;
+      b.set = (v) => { rec.push(v); orig(v); };
+      return rec;
+    };
+    const last = (rec) => rec[rec.length - 1];
+    // FX tick: master.delay.time ← custom slider 1 (0.4, offset -0.2), base
+    // 0.7 (CONF) over 0.05..1.5. The no-change gate only writes on movement,
+    // so drive the source (through its real UI row) and watch the writeback:
+    // slider 0.6 → 0.05+(norm(0.7)-0.2+0.6)·1.45 ≈ 1.28; back at 0.4 → ≈0.99.
+    const dRec = spy('master.delay.time');
+    const slRow = w1.document.querySelectorAll('#sliders-controls input[type="range"]')[0];
+    slRow.value = 0.6;
+    slRow.dispatchEvent(new w1.Event('input'));
+    await wait(120); // > one 33ms tick
+    if (!dRec.length || Math.abs(last(dRec) - 1.28) > 0.02)
+      fail('delay.time did not track the source slider: ' + last(dRec) + ', want ≈1.28');
+    slRow.value = 0.4;
+    slRow.dispatchEvent(new w1.Event('input'));
+    await wait(120);
+    if (dRec.length < 2 || Math.abs(last(dRec) - 0.99) > 0.02)
+      fail('delay.time writeback did not return with the source: ' + last(dRec) + ', want ≈0.99 (not base 0.7)');
+
+    // Note trigger: re-point l2.pitch at custom slider 2; 0→1 adds amount 0.5
+    // of the ±24 range = +12 semis = ×2 freq over the slider-at-0 render.
+    const m2 = probe.cfg.mods['l2.pitch'];
+    Object.assign(m2, { src: 'slider', slot: 1, offset: 0, amount: 0.5, min: 0, max: 1 });
+    const spec = { onsetS: 0, freqHz: 220, detuneCents: 0, tauS: 1, brightness: 0, crush: 0, gain: 1 };
+    probe.cfg.sliders[1].value = 0;
+    const lo = probe.layerNote({ ...spec }, probe.layers[1]).freqHz;
+    probe.cfg.sliders[1].value = 1;
+    const hi = probe.layerNote({ ...spec }, probe.layers[1]).freqHz;
+    if (Math.abs(hi / lo - 2) > 0.05)
+      fail('l2.pitch mapping inert at note trigger: freq ratio ' + hi / lo + ', want 2');
+
+    // An unmapped layer keeps exact base semantics (no mapping drift).
+    const plain = probe.layerNote({ ...spec }, probe.layers[2]);
+    if (plain.freqHz !== spec.freqHz * Math.pow(2, probe.cfg.layers[2].pitch / 12))
+      fail('unmapped layer 3 drifted from base: ' + plain.freqHz);
+
+    // The time/gate-driven sources write through the same tick.
+    const cRec = spy('master.chorus.rate'); // base 0.7 over 0.05..8
+    const cm = probe.cfg.mods['master.chorus.rate'];
+    Object.assign(cm, { src: 'lfo', wave: 'sine', rate: 4, offset: 0, amount: 0.3, min: 0, max: 1 });
+    await wait(200); // 0.8 of a 4 Hz cycle — the written values must vary
+    if (new Set(cRec.map((v) => v.toFixed(6))).size < 2)
+      fail('lfo source inert on the fx tick: ' + cRec.join(','));
+    // midi gate: 0 before a press, amount 0.3 above base after.
+    Object.assign(cm, { src: 'midi', field: 'gate' });
+    cRec.length = 0;
+    await wait(80);
+    const g0 = last(cRec);
+    w1.document.querySelector('.key[data-dir="U"]').click();
+    await wait(80);
+    if (!(last(cRec) > g0)) fail('midi source inert on the fx tick: ' + g0 + ' -> ' + last(cRec));
+    // adsr: the gate the press just opened walks the level up the attack.
+    Object.assign(cm, { src: 'adsr', a: 2, d: 0.5, s: 0.5, r: 0.5 });
+    cRec.length = 0;
+    await wait(60);
+    const e0 = last(cRec);
+    await wait(300);
+    if (!(last(cRec) > e0)) fail('adsr source inert on the fx tick: ' + e0 + ' -> ' + last(cRec));
+  }
 
   // Import refuses a typo'd key loudly instead of silently dropping it.
   w1.document.getElementById('cfg-text').value = JSON.stringify({ scheme: 'fixed', vibrate: 9 });
@@ -208,6 +298,27 @@ try {
     fail('JSON config without sidebar:true opened the sidebar (inference leak)');
   if (w1b.document.getElementById('scale-picker').value !== 'hirajoshi')
     fail('import is a patch, not a replace — scale should be back at default');
+
+  // The menu WRITE path (the user's actual flow, vs a hash-loaded mapping):
+  // map dev.gain → custom slider 1 through the ◇ menu, then the source moves
+  // the note-time applied value (base 0.8, amount 1 → clamp01(0.8 + src)).
+  const probeB = w1b.__modProbe;
+  const gainBtn = [...w1b.document.querySelectorAll('.mod-btn')].find(
+    (b) => b.getAttribute('aria-label') === 'mod mapping: dev.gain',
+  );
+  gainBtn.click();
+  const srcSelB = w1b.document.getElementById('mod-menu').querySelector('select');
+  srcSelB.value = 'slider';
+  srcSelB.dispatchEvent(new w1b.Event('change'));
+  const slB = w1b.document.querySelectorAll('#sliders-controls input[type="range"]')[0];
+  slB.value = 1;
+  slB.dispatchEvent(new w1b.Event('input'));
+  if (Math.abs(probeB.devSpec().gain - 1) > 1e-9)
+    fail('menu-set mapping inert: dev.gain ' + probeB.devSpec().gain + ', want 1');
+  slB.value = 0;
+  slB.dispatchEvent(new w1b.Event('input'));
+  if (Math.abs(probeB.devSpec().gain - 0.8) > 1e-9)
+    fail('menu-set mapping stuck: dev.gain ' + probeB.devSpec().gain + ', want 0.8 (base)');
   f1.remove();
 
   // The hand-typed gate shorthand still works.
